@@ -15,10 +15,16 @@ const FORM_DATA = {
   m3uValue: "TESTEM3U",
   epgLabel: "URL EPG",
   epgValue: "",
-  appLabel: "APP QUE O CLIENTE USARÁ",
+  appLabel: "APP QUE O CLIENTE USARA",
   appValue: "",
   priceLabel: "VALOR DA ASSINATURA",
-  priceValue: ""
+  priceValue: "",
+  nameLabel: "NOME",
+  nameValue: "",
+  phoneLabel: "WHATSAPP",
+  phoneValue: "",
+  notesLabel: "OBSERVACOES",
+  notesValue: ""
 };
 
 async function dumpLabels(page) {
@@ -30,7 +36,9 @@ async function dumpLabels(page) {
     }))
   );
   console.log("Labels encontrados na pagina de cadastro:");
-  labels.slice(0, 50).forEach((l, idx) => console.log(`${idx + 1}. "${l.text}" for=${l.forAttr} hasInput=${l.hasInput}`));
+  labels
+    .slice(0, 50)
+    .forEach((l, idx) => console.log(`${idx + 1}. "${l.text}" for=${l.forAttr} hasInput=${l.hasInput}`));
 }
 
 async function dumpInputs(page) {
@@ -175,9 +183,19 @@ export async function criarUsuarioGerenciaApp() {
   return criarUsuarioGerenciaAppComM3u(FORM_DATA.m3uValue);
 }
 
-export async function criarUsuarioGerenciaAppComM3u(m3uValue) {
+export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
+  const {
+    mac = FORM_DATA.macValue,
+    serverName = FORM_DATA.serverNameValue,
+    epg = FORM_DATA.epgValue,
+    app = FORM_DATA.appValue,
+    price = FORM_DATA.priceValue,
+    nome = FORM_DATA.nameValue,
+    whatsapp = FORM_DATA.phoneValue,
+    observacoes = FORM_DATA.notesValue
+  } = options;
 
   try {
     console.log("Acessando tela de login do GerenciaApp...");
@@ -186,7 +204,7 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue) {
     await page.type('input[type="email"], input[name="email"]', GERENCIA_USER, { delay: 20 });
     await page.type('input[type="password"], input[name="password"]', GERENCIA_PASS, { delay: 20 });
 
-    // Tenta localizar botão de submit de forma mais flexível, senão usa Enter
+    // Tenta localizar botao de submit de forma mais flexivel, senao usa Enter
     const foundSubmit = await page.evaluate(() => {
       const candidates = Array.from(
         document.querySelectorAll('button, input[type="submit"], input[type="button"]')
@@ -225,12 +243,22 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue) {
     await page.goto(CREATE_URL, { waitUntil: "networkidle2" });
 
     try {
-    await fillByLabel(page, FORM_DATA.macLabel, FORM_DATA.macValue);
-    await fillByLabel(page, FORM_DATA.serverNameLabel, FORM_DATA.serverNameValue);
-    await fillByLabel(page, FORM_DATA.m3uLabel, m3uValue || FORM_DATA.m3uValue);
-    await fillByLabel(page, FORM_DATA.epgLabel, FORM_DATA.epgValue);
-    await fillByLabel(page, FORM_DATA.appLabel, FORM_DATA.appValue);
-    await fillByLabel(page, FORM_DATA.priceLabel, FORM_DATA.priceValue);
+      const camposParaPreencher = [
+        [FORM_DATA.macLabel, mac],
+        [FORM_DATA.serverNameLabel, serverName],
+        [FORM_DATA.m3uLabel, m3uValue || FORM_DATA.m3uValue],
+        [FORM_DATA.epgLabel, epg],
+        [FORM_DATA.appLabel, app],
+        [FORM_DATA.priceLabel, price],
+        [FORM_DATA.nameLabel, nome],
+        [FORM_DATA.phoneLabel, whatsapp],
+        [FORM_DATA.notesLabel, observacoes]
+      ].filter(([label]) => !!label);
+
+      for (const [label, value] of camposParaPreencher) {
+        if (value === undefined || value === null) continue;
+        await fillByLabel(page, label, value);
+      }
     } catch (err) {
       await dumpLabels(page);
       await dumpInputs(page);
