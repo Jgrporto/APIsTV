@@ -1,48 +1,64 @@
 # APIsTV
 
-Guia rapido para instalar dependencias e colocar os scripts para rodar.
+Passo a passo para instalar, configurar e rodar os scripts. Inclui a lógica de cada fluxo para facilitar ajustes.
 
-## Requisitos
-- Node.js 18+ e npm instalados.
-- Acesso de rede para `painel.newbr.top`, `botbot.chat` e `gerenciaapp.top`.
-- Permissao para o Puppeteer baixar ou usar um Chromium (ocorre durante `npm install`).
+## 1) Instalação
+- Requisitos: Node.js 18+ e npm; acesso a `painel.newbr.top`, `botbot.chat`, `gerenciaapp.top`.
+- Instale dependências:
+  ```bash
+  npm install
+  ```
+  Se o download do Chromium falhar, use `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1` e defina `PUPPETEER_EXECUTABLE_PATH` apontando para um Chrome/Chromium instalado.
 
-## Instalar dependencias
-1. No diretorio do projeto rode:
-   ```bash
-   npm install
-   ```
-2. Se o download do Chromium falhar, use uma maquina com acesso liberado ou defina `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1` e configure `PUPPETEER_EXECUTABLE_PATH` apontando para um Chrome/Chromium ja instalado.
+## 2) O que configurar
+- BotBot e números: `server.js`, `send.js`, `listener.js`, `filterAndSend.js`, `autoAssist.js` (appkey/authkey, números de destino).
+- WhatsApp QR: `KEYWORD` e `DEVICE_PHONE` em `whatsappQrListener.js`; sessão fica em `.wwebjs_auth`.
+- GerenciaApp: `GERENCIA_USER`, `GERENCIA_PASS` e `FORM_DATA` em `gerenciaApp.js`.
+- Números de teste/destino: `sendNewBR.js`, `filterAndSend.js`, `autoAssist.js`, `listener.js`, `server.js`.
 
-## Configuracoes importantes
-Ajuste os valores fixos conforme o ambiente:
-- `server.js`: `DEVICE_PHONE`, `KEYWORD`, `SUCCESS_NUMBER`, `TEST_NAME`, `TEST_PHONE`.
-- `gerenciaApp.js`: credenciais `GERENCIA_USER` e `GERENCIA_PASS` e dados de formulario em `FORM_DATA`.
-- Chaves do BotBot (`appkey`/`authkey`) usadas em `server.js`, `send.js`, `listener.js`, `filterAndSend.js`, `autoAssist.js`.
-- Numeros de destino em `sendNewBR.js`, `filterAndSend.js`, `autoAssist.js`, `listener.js`.
+## 3) Fluxos principais
+- `server.js` (webhook + automação inicial):
+  - Sobe em `PORT` (padrão 3000) com `POST /webhook` esperando `{ from, message }`.
+  - Se recebe `ASSIST`, gera teste na API NewBR, filtra bloco `ASSIST PLUS` e responde via BotBot.
+  - Na inicialização, gera um teste, extrai M3U e cadastra no GerenciaApp via `criarUsuarioGerenciaAppComM3u`; envia mensagem de sucesso.
+- `whatsappQrListener.js` (WhatsApp Web + OCR de MAC):
+  - Primeiro run: mostra QR no terminal; após parear, reusa sessão.
+  - Texto igual a `KEYWORD`: gera teste na NewBR, extrai M3U e cria usuário no GerenciaApp.
+  - Imagens: baixa mídia, roda OCR (`tesseract.js`) e procura MAC (XX:XX:XX:XX:XX:XX ou 12 hex). Se achar, responde com o MAC.
+- `gerenciaApp.js` (Puppeteer):
+  - Faz login no GerenciaApp e preenche o formulário de criação de usuário via labels (`fillByLabel`), depois envia.
+- `listener.js` (polling BotBot):
+  - Busca mensagens recebidas; responde apenas ao número admin com comando `ASSIST`.
+  - Gera teste, filtra `ASSIST PLUS` e envia via BotBot. Ignora histórico inicial para evitar duplicar.
+- `autoAssist.js` (simples):
+  - Recebe `ASSIST` do admin e devolve o bloco filtrado `ASSIST PLUS`.
+- `filterAndSend.js`:
+  - Dispara um teste, filtra `ASSIST PLUS` e envia para `NUMERO_DESTINO`.
+- Exemplos:
+  - `send.js`: envia mensagem fixa via BotBot.
+  - `sendNewBR.js`: chama API NewBR e imprime resposta.
 
-## Executar o servidor principal
-1. Certifique-se de que o webhook `POST /webhook` esteja exposto (porta padrao 3000 ou `PORT`).
-2. Inicie:
-   ```bash
-   node server.js
-   ```
-   - Ao subir, `server.js` executa a automacao do GerenciaApp (usa o M3U retornado pela API NewBR) e envia mensagem de sucesso pelo BotBot.
-   - O endpoint `/webhook` espera um JSON com `from` e `message`; quando recebe o comando `ASSIST`, gera e devolve o bloco filtrado.
+## 4) Como rodar
+- Servidor principal (webhook + automação inicial):
+  ```bash
+  node server.js
+  ```
+- Listener WhatsApp com OCR:
+  ```bash
+  node whatsappQrListener.js
+  ```
+  Escaneie o QR; envie `KEYWORD` ou imagem com MAC para testar.
+- Outros: execute o script desejado (`node listener.js`, `node autoAssist.js`, `node filterAndSend.js`, etc.).
 
-## Scripts uteis
-- `node listener.js` - faz polling das mensagens no BotBot e responde ao comando `ASSIST`.
-- `node autoAssist.js` - fluxo simplificado que gera e envia o bloco ASSIST para o numero autorizado.
-- `node filterAndSend.js` - busca um teste, filtra o bloco `ASSIST PLUS` e envia para `NUMERO_DESTINO`.
-- `node send.js` - exemplo de envio simples via BotBot.
-- `node sendNewBR.js` - exemplo de chamada direta para a API do painel NewBR.
-- `node whatsappQrListener.js` - conecta no WhatsApp via QR Code usando `whatsapp-web.js`; ao receber a palavra-chave definida em `KEYWORD`, gera o teste no painel NewBR, extrai a URL M3U e cria o usuario no GerenciaApp. Na primeira execucao, sera exibido um QR Code no terminal para parear a conta; os dados ficam em `.wwebjs_auth`.
+## 5) Testes rápidos
+- Webhook local:
+  ```bash
+  curl -X POST http://localhost:3000/webhook ^
+    -H "Content-Type: application/json" ^
+    -d "{\"from\":\"5524999999999\",\"message\":\"ASSIST\"}"
+  ```
+- OCR/MAC: com `whatsappQrListener.js` pareado, envie uma foto com MAC legível; o bot deve responder `MAC detectado: ...`.
 
-## Teste rapido do webhook
-Com o servidor rodando, envie um POST local:
-```bash
-curl -X POST http://localhost:3000/webhook ^
-  -H "Content-Type: application/json" ^
-  -d "{\"from\":\"5524999999999\",\"message\":\"ASSIST\"}"
-```
-O retorno e o log devem mostrar o processamento do comando.
+## 6) Observações
+- Se Puppeteer ou Tesseract não baixarem assets por bloqueio de rede, aponte para binários/dados locais (`PUPPETEER_EXECUTABLE_PATH`, `TESSDATA_PREFIX`) ou rode em máquina com acesso liberado.
+- Ajuste chaves e números antes de usar em produção; os valores no código são placeholders de teste.
