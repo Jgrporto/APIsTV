@@ -5,9 +5,9 @@ const DEVICE_PHONE = "5524999162165";
 const ADMIN_NUMBER = "5524999157259";
 const KEYWORD = "ASSIST PLUS";
 
-let ultimoId = 0; // controla última mensagem lida
+let ultimoId = 0; // controla ultima mensagem lida
 
-/* 🔵 BUSCAR MENSAGENS RECEBIDAS NO BOTBOT */
+/* BUSCAR MENSAGENS RECEBIDAS NO BOTBOT */
 async function buscarMensagens() {
   const resp = await axios.get(
     "https://botbot.chat/api/messages?appkey=4d557310-fc85-4723-9035-dce444191947&authkey=KSGOsxWYorbTBtAGCkO4CEfkru62VK8dwLXst74Ihe00S3NDht"
@@ -16,7 +16,7 @@ async function buscarMensagens() {
   return resp.data.messages || [];
 }
 
-/* 🔥 GERAR TESTE NEWBR */
+/* GERAR TESTE NEWBR */
 async function gerarTeste(cliente) {
   const payload = {
     appName: "com.whatsapp",
@@ -38,14 +38,14 @@ async function gerarTeste(cliente) {
   return res.data.reply;
 }
 
-/* 🔍 FILTRAR ASSIST */
+/* FILTRAR ASSIST */
 function filtrarAssist(texto) {
   const linhas = texto.split("\n");
 
   let capturando = false;
   let resultado = [];
 
-  const regex = /^🟢|^🟡|^🔴|^🟠/;
+  const regex = /^�YY�|^�YY�|^�Y"�|^�YY�/;
 
   for (let linha of linhas) {
     if (linha.toUpperCase().includes(KEYWORD.toUpperCase())) {
@@ -62,7 +62,7 @@ function filtrarAssist(texto) {
   return resultado.join("\n").trim();
 }
 
-/* 📤 ENVIAR PELO BOTBOT */
+/* ENVIAR PELO BOTBOT */
 async function enviarMensagem(numero, texto) {
   const form = new FormData();
 
@@ -77,8 +77,8 @@ async function enviarMensagem(numero, texto) {
   });
 }
 
-/* 🔁 LOOP PRINCIPAL */
-async function loop() {
+/* LOOP PRINCIPAL */
+async function processarNovasMensagens() {
   try {
     const mensagens = await buscarMensagens();
 
@@ -90,36 +90,52 @@ async function loop() {
       const texto = msg.message;
       const numero = msg.from;
 
-      // valida admin
-      if (numero !== ADMIN_NUMBER) continue;
+      if (numero !== ADMIN_NUMBER) continue; // valida admin
 
       if (texto.trim().toUpperCase() === "ASSIST") {
-        console.log("🔥 ASSIST detectado!");
+        console.log("ASSIST detectado!");
 
         const resposta = await gerarTeste(numero);
 
-        if (resposta.includes("já solicitou")) {
-          await enviarMensagem(numero, "❌ Você já solicitou um teste hoje.");
+        if (resposta.includes("jǭ solicitou")) {
+          await enviarMensagem(numero, "Voce ja solicitou um teste hoje.");
           continue;
         }
 
         const filtrado = filtrarAssist(resposta);
 
         if (!filtrado) {
-          await enviarMensagem(numero, "⚠ Nenhum bloco ASSIST PLUS encontrado.");
+          await enviarMensagem(numero, "Nenhum bloco ASSIST PLUS encontrado.");
           continue;
         }
 
         await enviarMensagem(numero, filtrado);
       }
     }
-
   } catch (e) {
     console.error("Erro:", e.response?.data || e.message);
   }
-
-  setTimeout(loop, 3000); // verifica a cada 3 segundos
 }
 
-console.log("🚀 Listener iniciado...");
-loop();
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function inicializarUltimoId() {
+  const msgs = await buscarMensagens();
+  if (!msgs.length) return;
+  const maxId = Math.max(...msgs.map((m) => m.id || 0));
+  ultimoId = maxId;
+  console.log(`Marcador inicial definido para id ${ultimoId} (ignora historico anterior).`);
+}
+
+async function start() {
+  await inicializarUltimoId();
+  console.log("Listener iniciado...");
+  while (true) {
+    await processarNovasMensagens();
+    await sleep(3000);
+  }
+}
+
+start();
