@@ -15,7 +15,7 @@ const FORM_DATA = {
   m3uValue: "TESTEM3U",
   epgLabel: "URL EPG",
   epgValue: "",
-  appLabel: "APP QUE O CLIENTE USARA",
+  appLabel: "APP QUE O CLIENTE USARÁ",
   appValue: "",
   priceLabel: "VALOR DA ASSINATURA",
   priceValue: "",
@@ -64,9 +64,16 @@ async function dumpInputs(page) {
 async function fillByLabel(page, labelText, value) {
   const result = await page.evaluate(
     (labelTextArg, valueArg) => {
+      const normalize = (str) =>
+        (str || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toUpperCase();
+
+      const targetNormalized = normalize(labelTextArg);
       const labels = Array.from(document.querySelectorAll("label"));
       const target = labels.find((l) =>
-        (l.textContent || "").toUpperCase().includes(labelTextArg.toUpperCase())
+        normalize(l.textContent || "").includes(targetNormalized)
       );
 
       if (!target) return { ok: false, reason: `Label "${labelTextArg}" not found` };
@@ -184,18 +191,18 @@ export async function criarUsuarioGerenciaApp() {
 }
 
 export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
+  const minimalFields = !!options.minimalFields;
+  const mac = minimalFields ? options.mac : options.mac ?? FORM_DATA.macValue;
+  const serverName = minimalFields ? options.serverName : options.serverName ?? FORM_DATA.serverNameValue;
+  const epg = minimalFields ? options.epg : options.epg ?? FORM_DATA.epgValue;
+  const app = minimalFields ? options.app : options.app ?? FORM_DATA.appValue;
+  const price = minimalFields ? options.price : options.price ?? FORM_DATA.priceValue;
+  const nome = minimalFields ? options.nome : options.nome ?? FORM_DATA.nameValue;
+  const whatsapp = minimalFields ? options.whatsapp : options.whatsapp ?? FORM_DATA.phoneValue;
+  const observacoes = minimalFields ? options.observacoes : options.observacoes ?? FORM_DATA.notesValue;
+
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
-  const {
-    mac = FORM_DATA.macValue,
-    serverName = FORM_DATA.serverNameValue,
-    epg = FORM_DATA.epgValue,
-    app = FORM_DATA.appValue,
-    price = FORM_DATA.priceValue,
-    nome = FORM_DATA.nameValue,
-    whatsapp = FORM_DATA.phoneValue,
-    observacoes = FORM_DATA.notesValue
-  } = options;
 
   try {
     console.log("Acessando tela de login do GerenciaApp...");
@@ -243,22 +250,69 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
     await page.goto(CREATE_URL, { waitUntil: "networkidle2" });
 
     try {
-      const camposParaPreencher = [
-        [FORM_DATA.macLabel, mac],
-        [FORM_DATA.serverNameLabel, serverName],
-        [FORM_DATA.m3uLabel, m3uValue || FORM_DATA.m3uValue],
-        [FORM_DATA.epgLabel, epg],
-        [FORM_DATA.appLabel, app],
-        [FORM_DATA.priceLabel, price],
-        [FORM_DATA.nameLabel, nome],
-        [FORM_DATA.phoneLabel, whatsapp],
-        [FORM_DATA.notesLabel, observacoes]
-      ].filter(([label]) => !!label);
+      if (minimalFields) {
+        if (!mac || !serverName || !m3uValue) {
+          throw new Error("minimalFields requer mac, serverName e m3uValue preenchidos");
+        }
 
-      for (const [label, value] of camposParaPreencher) {
-        if (value === undefined || value === null) continue;
+        // Seleciona modo MAC, preenche campos principais por seletor direto quando possível
+        await page.evaluate(() => {
+          const sel = document.querySelector("#modoSelecao");
+          if (sel) {
+            const opts = Array.from(sel.options || []);
+            const macOpt = opts.find(
+              (o) =>
+                (o.textContent || "").toUpperCase().includes("MAC") ||
+                (o.value || "").toUpperCase().includes("MAC")
+            );
+            const target = macOpt || opts[0];
+            if (target) {
+              sel.value = target.value;
+              sel.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }
+        });
+
+        if (mac) {
+          await page.evaluate((value) => {
+            const inp = document.querySelector("#mac-input");
+            if (inp) {
+              inp.value = "";
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+              inp.value = value;
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }, mac);
+        }
+        console.log(`Preenchendo minimal: MAC=${mac} | SERVER=${serverName} | M3U=${m3uValue}`);
+      }
+
+      const camposParaPreencher = minimalFields
+        ? [
+            [FORM_DATA.macLabel, mac],
+            [FORM_DATA.serverNameLabel, serverName],
+            [FORM_DATA.m3uLabel, m3uValue]
+          ]
+        : [
+            [FORM_DATA.macLabel, mac],
+            [FORM_DATA.serverNameLabel, serverName],
+            [FORM_DATA.m3uLabel, m3uValue || FORM_DATA.m3uValue],
+            [FORM_DATA.epgLabel, epg],
+            [FORM_DATA.appLabel, app],
+            [FORM_DATA.priceLabel, price],
+            [FORM_DATA.nameLabel, nome],
+            [FORM_DATA.phoneLabel, whatsapp],
+            [FORM_DATA.notesLabel, observacoes]
+          ];
+
+      const camposFiltrados = camposParaPreencher.filter(
+        ([label, value]) => !!label && value !== undefined && value !== null
+      );
+
+      for (const [label, value] of camposFiltrados) {
         await fillByLabel(page, label, value);
       }
+
     } catch (err) {
       await dumpLabels(page);
       await dumpInputs(page);
