@@ -78,6 +78,9 @@ function scheduleFollowup(chatId, nome) {
     clearTimeout(followupTimers.get(targetId));
   }
 
+  const fireAt = new Date(Date.now() + FOLLOWUP_MS).toISOString();
+  console.log(`[Followup] Agendado para ${targetId} em ${fireAt} (delay ${FOLLOWUP_MS} ms)`);
+
   const timer = setTimeout(async () => {
     try {
       await client.sendMessage(
