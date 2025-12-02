@@ -14,9 +14,23 @@ const COMMANDS = {
   LAZER: "#LAZER",
   IBO: "#IBO"
 };
+const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
+const MSG_INSTRUCAO_CELULAR =
+  "Voce vai baixar o aplicativo, instalar e abrir.\n\nAssim que abrir me manda um print do aplicativo aberto";
+const MSG_PEDIR_PRINT =
+  "Preciso do print do app aberto para liberar o teste. Pode me enviar a imagem da tela aberta, por favor?";
+const MSG_TESTE_ATIVO = "Aguarde um momento que um atendente vai falar com voce.";
 
+
+function normalizeInstrucao(str) {
+  return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+}
+
+function isInstrucaoMensagem(texto) {
+  return normalizeInstrucao(texto).includes(INSTRUCAO_TRIGGER);
+}
 const aguardandoMac = new Set();
-const fluxoCelular = new Map(); // { stage: 'aguardando_escolha'|'aguardando_prova', confirming: bool, mac?: string }
+const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
 
 function resolveNome(contact, chat, phone) {
   return (
@@ -212,7 +226,7 @@ async function responderComTeste(msg, phone, nome, keyword, appNome) {
   }
 
   if (detectouLimite(reply)) {
-    await msg.reply("Voce ja solicitou um teste hoje.");
+    await msg.reply(MSG_TESTE_ATIVO);
     return;
   }
 
@@ -244,7 +258,8 @@ async function handleIboImagem(msg, phone, nome) {
     return;
   }
   if (detectouLimite(reply)) {
-    await msg.reply("Voce ja solicitou um teste hoje.");
+    fluxoCelular.delete(phone);
+    await msg.reply(MSG_TESTE_ATIVO);
     return;
   }
 
@@ -277,30 +292,6 @@ async function handleIboImagem(msg, phone, nome) {
   await msg.reply("Teste Liberado, pode abrir o app agora?");
 }
 
-function querFluxoCelular(textoLower) {
-  if (!textoLower) return false;
-  const regexApp = /\bapp\b/;
-  return (
-    textoLower.includes("celular") || // somente vamos seguir fluxo celular
-    regexApp.test(textoLower)
-  );
-}
-
-function textoConfirmaDownload(textoLower) {
-  if (!textoLower) return false;
-  return (
-    textoLower.includes("consegui") ||
-    textoLower.includes("baixei") ||
-    textoLower.includes("instalei") ||
-    textoLower.includes("instalado") ||
-    textoLower.includes("pronto") ||
-    textoLower.includes("abri") ||
-    textoLower.includes("aberto") ||
-    textoLower.includes("print") ||
-    textoLower.includes("screenshot")
-  );
-}
-
 function textoSim(textoLower) {
   return ["sim", "s", "yes", "yep", "isso", "pode", "ok", "okay"].some((k) => {
     const re = new RegExp(`\\b${k}\\b`, "i");
@@ -315,23 +306,19 @@ function textoNao(textoLower) {
   });
 }
 
-async function iniciarFluxoCelular(msg, nome, phone) {
-  fluxoCelular.set(phone, { stage: "aguardando_escolha", confirming: false });
-  await msg.reply("Deseja testar por onde?\n- Televisao\n- Celular\n- Iphone\n- TVBOX");
-}
-
-async function enviarPassoCelular(msg) {
-  await msg.reply(`Clica *NESSE LINK* pra baixar o aplicativo 👇🏻\n\nhttps://play.google.com/store/apps/details?id=com.colinet.boxv3&hl=pt_BR`);
-  await msg.reply("Voce vai baixar o aplicativo, instalar e abrir.\nAssim que abrir me manda um print do aplicativo aberto ou diga 'baixei' aqui pra eu liberar seu teste.");
-}
-
 async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
   const estado = fluxoCelular.get(phone) || {};
   const mac = macFromMedia || estado.mac;
 
   if (!mac) {
-    fluxoCelular.set(phone, { ...estado, mac: null, stage: "aguardando_prova", confirming: false });
-    await msg.reply("Preciso de uma foto com o MAC visivel para liberar. Envie a imagem e tente novamente.");
+    fluxoCelular.set(phone, {
+      ...estado,
+      mac: null,
+      stage: "aguardando_prova",
+      confirming: false,
+      printReminderSent: true
+    });
+    await msg.reply("Preciso de uma foto com o MAC visivel para liberar. Envie a imagem do app aberto, por favor.");
     return;
   }
 
@@ -341,7 +328,8 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
     return;
   }
   if (detectouLimite(reply)) {
-    await msg.reply("Voce ja solicitou um teste hoje.");
+    fluxoCelular.delete(phone);
+    await msg.reply(MSG_TESTE_ATIVO);
     return;
   }
 
@@ -368,7 +356,7 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
     });
     console.log(`[CELULAR] Cadastro GerenciaApp OK para ${phone} (${serverName})`);
   } catch (err) {
-    console.error("[CELULAR] Falha ao cadastrar no GerenciaApp:", err.message);
+    console.error('[CELULAR] Falha ao cadastrar no GerenciaApp:', err.message);
   } finally {
     fluxoCelular.delete(phone);
   }
@@ -379,14 +367,13 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
 async function handleFluxoCelular(msg, phone, nome, textoLower) {
   const estado = fluxoCelular.get(phone);
 
-  // Responde a confirmacao pendente
+  if (!estado) return false;
+
   if (estado?.confirming) {
     if (textoSim(textoLower)) {
       fluxoCelular.set(phone, { ...estado, confirming: false });
       if (estado.stage === "aguardando_prova") {
-        await msg.reply("Perfeito, continue: mande um print do app aberto ou escreva 'baixei' para liberar seu teste.");
-      } else {
-        await msg.reply('Certo! Responda "Celular" para eu te mandar o link e instrucoes.');
+        await msg.reply(MSG_PEDIR_PRINT);
       }
       return true;
     }
@@ -398,39 +385,12 @@ async function handleFluxoCelular(msg, phone, nome, textoLower) {
     return false;
   }
 
-  if (estado?.stage === "aguardando_prova") {
-    if (textoConfirmaDownload(textoLower)) {
-      await concluirFluxoCelular(msg, phone, nome, estado.mac);
-      return true;
+  if (estado.stage === "aguardando_prova") {
+    if (!estado.printReminderSent) {
+      fluxoCelular.set(phone, { ...estado, printReminderSent: true });
+      await msg.reply(MSG_PEDIR_PRINT);
     }
-    // fora do esperado, pergunta uma unica vez
-    fluxoCelular.set(phone, { ...estado, confirming: true });
-    await msg.reply("O teste e pelo celular, certo? Responda SIM para continuar ou NAO para falar com um atendente.");
     return true;
-  }
-
-  if (estado?.stage === "aguardando_escolha") {
-    if (textoLower.includes("celular")) {
-      fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false });
-      await enviarPassoCelular(msg);
-      return true;
-    }
-
-    // fluxo so atende celular: confirma uma unica vez e, se nao, sai
-    fluxoCelular.set(phone, { ...estado, confirming: true });
-    await msg.reply("Esse fluxo e apenas para instalar no celular. Responda SIM para continuar ou NAO para falar com um atendente.");
-    return true;
-  }
-
-  if (!estado && querFluxoCelular(textoLower)) {
-    if (textoLower.includes("celular")) {
-      fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false });
-      await enviarPassoCelular(msg);
-      return true;
-    } else {
-      await iniciarFluxoCelular(msg, nome, phone);
-      return true;
-    }
   }
 
   return false;
@@ -457,11 +417,12 @@ async function processMessage(msg) {
     if (estadoCelular?.stage === "aguardando_prova") {
       const leitura = await lerMacDaImagem(msg);
       if (leitura.ok && leitura.mac) {
-        fluxoCelular.set(phone, { ...estadoCelular, mac: leitura.mac, confirming: false });
+        fluxoCelular.set(phone, { ...estadoCelular, mac: leitura.mac, confirming: false, printReminderSent: true });
         console.log(`[CELULAR] MAC detectado (${phone} - ${nome}): ${leitura.mac}`);
         await concluirFluxoCelular(msg, phone, nome, leitura.mac);
       } else {
-        await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis (precisa aparecer o MAC).");
+        fluxoCelular.delete(phone);
+        await msg.reply("Nao consegui identificar o MAC. Um atendente vai te chamar para finalizar, tudo bem?");
       }
       return;
     }
@@ -553,8 +514,13 @@ client.on("message_create", async (msg) => {
   if (!msg.fromMe) return;
 
   const phone = cleanPhone(msg.to || msg.from);
+  const corpo = (msg.body || "").trim();
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
+
+  if (isInstrucaoMensagem(corpo)) {
+    fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
+  }
 
   let labels = [];
   if (chat?.getLabels) {
@@ -577,7 +543,6 @@ client.on("message_create", async (msg) => {
     phone ||
     "Cliente";
 
-  const corpo = (msg.body || "").trim();
   const timestamp = new Date().toISOString();
 
   console.log(
