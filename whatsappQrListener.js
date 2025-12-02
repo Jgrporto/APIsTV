@@ -35,7 +35,13 @@ const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool
 let latestQr = "";
 const app = express();
 const QR_PORT = process.env.PORT || 3000;
+const SELF_PING_URL = process.env.SELF_PING_URL || "";
+const IDLE_LOG_MS = Number(process.env.IDLE_LOG_MS || 300000); // 5 min
 
+let lastActivity = Date.now();
+const touchActivity = () => {
+  lastActivity = Date.now();
+};
 function resolveNome(contact, chat, phone) {
   return (
     contact?.verifiedName ||
@@ -465,6 +471,7 @@ const client = new Client({
 });
 
 client.on("qr", (qr) => {
+  touchActivity();
   latestQr = qr;
   const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qr)}`;
   console.log("QR Code gerado. Abra o link abaixo para escanear em qualquer dispositivo (copie e cole no navegador):");
@@ -474,10 +481,12 @@ client.on("qr", (qr) => {
 });
 
 client.on("ready", () => {
+  touchActivity();
   console.log("Cliente WhatsApp conectado e pronto para receber mensagens.");
 });
 
 client.on("message", async (msg) => {
+  touchActivity();
   await processMessage(msg).catch((err) => console.error("Erro ao processar mensagem:", err.message));
 
   // Log estruturado conforme modelo solicitado
@@ -520,6 +529,7 @@ client.on("message", async (msg) => {
 // Log estruturado para mensagens enviadas pela própria conta
 client.on("message_create", async (msg) => {
   if (!msg.fromMe) return;
+  touchActivity();
 
   const phone = cleanPhone(msg.to || msg.from);
   const corpo = (msg.body || "").trim();
@@ -614,3 +624,30 @@ app.get("/qr.json", (_req, res) => {
 app.listen(QR_PORT, () => {
   console.log(`Servidor de QR em http://localhost:${QR_PORT}/qr`);
 });
+
+// Ping periódico opcional para manter o serviço acordado (defina SELF_PING_URL)
+function startKeepAlive() {
+  if (!SELF_PING_URL) {
+    console.log("Keep-alive desativado (defina SELF_PING_URL para habilitar).");
+    return;
+  }
+  const interval = Number(process.env.SELF_PING_INTERVAL_MS || 240000); // default 4 min
+  console.log(`Keep-alive ligado: ping em ${SELF_PING_URL} a cada ${interval} ms`);
+  setInterval(() => {
+    axios
+      .get(SELF_PING_URL)
+      .then(() => console.log("Keep-alive ping OK"))
+      .catch((err) => console.log("Keep-alive falhou:", err.message));
+  }, interval);
+}
+
+startKeepAlive();
+
+// Log de ociosidade: se ficar sem eventos por IDLE_LOG_MS, imprime aviso
+setInterval(() => {
+  const agora = Date.now();
+  if (agora - lastActivity >= IDLE_LOG_MS) {
+    console.log("Aguardando mensagens...");
+    touchActivity();
+  }
+}, Math.max(60000, Math.min(IDLE_LOG_MS, 300000))); // checa entre 1 e 5 minutos
