@@ -37,6 +37,8 @@ const app = express();
 const QR_PORT = process.env.PORT || 3000;
 const SELF_PING_URL = process.env.SELF_PING_URL || "";
 const IDLE_LOG_MS = Number(process.env.IDLE_LOG_MS || 300000); // 5 min
+const FOLLOWUP_MS = Number(process.env.FOLLOWUP_MS || 4 * 60 * 60 * 1000); // 4h padrao
+const followupTimers = new Map(); // chatId -> timeoutId
 
 let lastActivity = Date.now();
 const touchActivity = () => {
@@ -59,6 +61,37 @@ function resolveNome(contact, chat, phone) {
 function nomeSeguro(nome, phone) {
   const n = (nome || "").trim();
   return n || phone || "Cliente";
+}
+
+function ensureChatId(raw) {
+  if (!raw) return null;
+  if (raw.includes("@")) return raw;
+  const digits = cleanPhone(raw);
+  return digits ? `${digits}@c.us` : null;
+}
+
+function scheduleFollowup(chatId, nome) {
+  const targetId = ensureChatId(chatId);
+  if (!targetId || !client) return;
+
+  if (followupTimers.has(targetId)) {
+    clearTimeout(followupTimers.get(targetId));
+  }
+
+  const timer = setTimeout(async () => {
+    try {
+      await client.sendMessage(
+        targetId,
+        `Seu teste terminou. ${nome ? `${nome}, ` : ""}como foi o teste?`
+      );
+    } catch (err) {
+      console.error("[Followup] Falha ao enviar followup:", err.message);
+    } finally {
+      followupTimers.delete(targetId);
+    }
+  }, FOLLOWUP_MS);
+
+  followupTimers.set(targetId, timer);
 }
 
 async function gerarTesteSeguro(cliente, nome = "Cliente", appEscolhido = "") {
@@ -249,6 +282,7 @@ async function responderComTeste(msg, phone, nome, keyword, appNome) {
 
   await msg.reply(filtrado);
   console.log(`[${appNome}] Teste enviado para ${phone}`);
+  scheduleFollowup(msg.from, nome);
 }
 
 async function handleIboImagem(msg, phone, nome) {
@@ -300,6 +334,7 @@ async function handleIboImagem(msg, phone, nome) {
   }
 
   await msg.reply("Teste Liberado, pode abrir o app agora?");
+  scheduleFollowup(msg.from, nome);
 }
 
 function textoSim(textoLower) {
@@ -347,6 +382,7 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
   if (!m3u) {
     console.log("[CELULAR] Nao foi possivel extrair M3U do teste para cadastro.");
     await msg.reply("Seu teste foi gerado! Fecha o app e abre novamente.");
+    scheduleFollowup(msg.from, nome);
     return;
   }
 
@@ -372,6 +408,7 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
   }
 
   await msg.reply("Seu teste foi gerado! Fecha o app e abre novamente.");
+  scheduleFollowup(msg.from, nome);
 }
 
 async function handleFluxoCelular(msg, phone, nome, textoLower) {
