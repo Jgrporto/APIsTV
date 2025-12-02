@@ -231,7 +231,7 @@ function detectouLimite(texto) {
 async function responderComTeste(msg, phone, nome, keyword, appNome) {
   const reply = await gerarTesteSeguro(phone, nome, appNome);
   if (!reply) {
-    await msg.reply("Servico de testes indisponivel agora. Tente novamente em instantes.");
+    await msg.reply("So um momento! Vou chamar um dos atendentes.");
     return;
   }
 
@@ -264,7 +264,7 @@ async function handleIboImagem(msg, phone, nome) {
 
   const reply = await gerarTesteSeguro(phone, nome, "IBO");
   if (!reply) {
-    await msg.reply("Servico de testes indisponivel agora. Tente novamente em instantes.");
+    await msg.reply("So um momento! Vou chamar um dos atendentes.");
     return;
   }
   if (detectouLimite(reply)) {
@@ -334,7 +334,7 @@ async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
 
   const reply = await gerarTesteSeguro(phone, nome, "CELULAR");
   if (!reply) {
-    await msg.reply("Servico de testes indisponivel agora. Tente novamente em instantes.");
+    await msg.reply("So um momento! Vou chamar um dos atendentes.");
     return;
   }
   if (detectouLimite(reply)) {
