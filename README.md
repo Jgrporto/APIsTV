@@ -62,3 +62,11 @@ Passo a passo para instalar, configurar e rodar os scripts. Inclui a lógica de 
 ## 6) Observações
 - Se Puppeteer ou Tesseract não baixarem assets por bloqueio de rede, aponte para binários/dados locais (`PUPPETEER_EXECUTABLE_PATH`, `TESSDATA_PREFIX`) ou rode em máquina com acesso liberado.
 - Ajuste chaves e números antes de usar em produção; os valores no código são placeholders de teste.
+
+
+## 7) Variaveis para o Railway
+- GERENCIA_USER / GERENCIA_PASS / GERENCIA_LOGIN_URL / GERENCIA_CREATE_URL: credenciais e URLs do GerenciaApp.
+- BOTBOT_APPKEY / BOTBOT_AUTHKEY: chaves do bot (substitua os valores hardcoded).
+- DEVICE_PHONE: numero conectado ao BotBot/WhatsApp.
+- PUPPETEER_SKIP_CHROMIUM_DOWNLOAD (opcional): defina 1 se for usar Chromium do sistema; combine com PUPPETEER_EXECUTABLE_PATH.
+- TESSDATA_PREFIX (opcional): caminho do eng.traineddata se nao usar o arquivo local.

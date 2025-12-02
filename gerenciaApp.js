@@ -1,10 +1,10 @@
 import puppeteer from "puppeteer";
 
-const LOGIN_URL = "https://gerenciaapp.top/login";
-const CREATE_URL = "https://gerenciaapp.top/users/create";
+const LOGIN_URL = process.env.GERENCIA_LOGIN_URL || "https://gerenciaapp.top/login";
+const CREATE_URL = process.env.GERENCIA_CREATE_URL || "https://gerenciaapp.top/users/create";
 
-const GERENCIA_USER = "da2298@br.com";
-const GERENCIA_PASS = "90012345";
+const GERENCIA_USER = process.env.GERENCIA_USER || "da2298@br.com";
+const GERENCIA_PASS = process.env.GERENCIA_PASS || "90012345";
 
 const FORM_DATA = {
   macLabel: "MAC DO DISPOSITIVO",
@@ -201,7 +201,10 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
   const whatsapp = minimalFields ? options.whatsapp : options.whatsapp ?? FORM_DATA.phoneValue;
   const observacoes = minimalFields ? options.observacoes : options.observacoes ?? FORM_DATA.notesValue;
 
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
   const page = await browser.newPage();
 
   try {
