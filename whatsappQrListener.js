@@ -2,6 +2,7 @@ import wweb from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
 import axios from "axios";
 import Tesseract from "tesseract.js";
+import express from "express";
 import { criarUsuarioGerenciaAppComM3u } from "./gerenciaApp.js";
 
 const { Client, LocalAuth } = wweb;
@@ -31,6 +32,9 @@ function isInstrucaoMensagem(texto) {
 }
 const aguardandoMac = new Set();
 const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
+let latestQr = "";
+const app = express();
+const QR_PORT = process.env.PORT || 3000;
 
 function resolveNome(contact, chat, phone) {
   return (
@@ -461,7 +465,8 @@ const client = new Client({
 });
 
 client.on("qr", (qr) => {
-  console.log("QR Code gerado, escaneie para conectar:");
+  latestQr = qr;
+  console.log(`QR Code gerado. Acesse http://localhost:${QR_PORT}/qr para escanear.`);
   qrcode.generate(qr, { small: true });
 });
 
@@ -557,3 +562,52 @@ client.on("message_create", async (msg) => {
 });
 
 client.initialize();
+
+// Servidor simples para exibir o QR em pagina web
+app.get("/", (_req, res) => res.redirect("/qr"));
+app.get("/qr", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  const html = `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>QR WhatsApp</title>
+    <meta http-equiv="refresh" content="6" />
+    <style>
+      body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+      .card { background: #1e293b; padding: 24px 28px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); text-align: center; }
+      #qrcode { margin: 16px auto; }
+      .info { font-size: 14px; color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Escaneie o QR do WhatsApp</h2>
+      <div id="qrcode"></div>
+      <div class="info">A página atualiza a cada 6s enquanto um novo QR estiver disponível.</div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script>
+      const qrData = ${JSON.stringify(latestQr || "")};
+      if (qrData) {
+        new QRCode(document.getElementById("qrcode"), {
+          text: qrData,
+          width: 280,
+          height: 280
+        });
+      } else {
+        document.getElementById("qrcode").innerHTML = "<p>QR ainda não gerado.</p>";
+      }
+    </script>
+  </body>
+</html>`;
+  res.send(html);
+});
+
+app.get("/qr.json", (_req, res) => {
+  res.json({ qr: latestQr || null });
+});
+
+app.listen(QR_PORT, () => {
+  console.log(`Servidor de QR em http://localhost:${QR_PORT}/qr`);
+});
