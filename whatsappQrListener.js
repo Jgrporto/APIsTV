@@ -466,7 +466,10 @@ const client = new Client({
 
 client.on("qr", (qr) => {
   latestQr = qr;
-  console.log(`QR Code gerado. Acesse http://localhost:${QR_PORT}/qr para escanear.`);
+  const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qr)}`;
+  console.log("QR Code gerado. Abra o link abaixo para escanear em qualquer dispositivo (copie e cole no navegador):");
+  console.log(qrImgUrl);
+  console.log(`Opcional (se tiver acesso local): http://localhost:${QR_PORT}/qr`);
   qrcode.generate(qr, { small: true });
 });
 
