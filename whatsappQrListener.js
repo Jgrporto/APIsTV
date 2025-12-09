@@ -17,6 +17,7 @@ const COMMANDS = {
 };
 const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
 const LAZER_INSTRUCAO_TRIGGER = "CHEGANDO NESSA TELA VOCE ME AVISA AQUI";
+const LAZER_INSTRUCAO_TRIGGER_PLAYLIST = "ASSIM QUE BAIXAR, CLICA NA OPCAO PLAYLIST E ME MANDA UMA FOTO";
 const LAZER_INSTRUCAO_TTL_MS = Number(process.env.LAZER_INSTRUCAO_TTL_MS || 12 * 60 * 60 * 1000); // 12h padrao
 const MSG_INSTRUCAO_CELULAR =
   "Voce vai baixar o aplicativo, instalar e abrir.\n\nAssim que abrir me manda um print do aplicativo aberto";
@@ -34,7 +35,11 @@ function isInstrucaoMensagem(texto) {
 }
 
 function isInstrucaoLazer(texto) {
-  return normalizeInstrucao(texto).includes(LAZER_INSTRUCAO_TRIGGER);
+  const norm = normalizeInstrucao(texto);
+  return (
+    norm.includes(LAZER_INSTRUCAO_TRIGGER) ||
+    norm.includes(LAZER_INSTRUCAO_TRIGGER_PLAYLIST)
+  );
 }
 const aguardandoMac = new Set();
 const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
