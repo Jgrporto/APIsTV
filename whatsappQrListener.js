@@ -16,6 +16,8 @@ const COMMANDS = {
   IBO: "#IBO"
 };
 const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
+const LAZER_INSTRUCAO_TRIGGER = "CHEGANDO NESSA TELA VOCE ME AVISA AQUI";
+const LAZER_INSTRUCAO_TTL_MS = Number(process.env.LAZER_INSTRUCAO_TTL_MS || 12 * 60 * 60 * 1000); // 12h padrao
 const MSG_INSTRUCAO_CELULAR =
   "Voce vai baixar o aplicativo, instalar e abrir.\n\nAssim que abrir me manda um print do aplicativo aberto";
 const MSG_PEDIR_PRINT =
@@ -30,8 +32,13 @@ function normalizeInstrucao(str) {
 function isInstrucaoMensagem(texto) {
   return normalizeInstrucao(texto).includes(INSTRUCAO_TRIGGER);
 }
+
+function isInstrucaoLazer(texto) {
+  return normalizeInstrucao(texto).includes(LAZER_INSTRUCAO_TRIGGER);
+}
 const aguardandoMac = new Set();
 const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
+const aguardandoLazerFollowup = new Map(); // phone -> { createdAt }
 let latestQr = "";
 const app = express();
 const QR_PORT = process.env.PORT || 3000;
@@ -457,6 +464,19 @@ async function processMessage(msg) {
 
   console.log(`[MSG] ${phone} (${nome}): ${texto}`);
 
+  const estadoLazer = aguardandoLazerFollowup.get(phone);
+  if (estadoLazer) {
+    const expirou = Date.now() - estadoLazer.createdAt > LAZER_INSTRUCAO_TTL_MS;
+    if (expirou) {
+      aguardandoLazerFollowup.delete(phone);
+    } else {
+      aguardandoLazerFollowup.delete(phone);
+      console.log(`[LAZER] Follow-up detectado para ${phone}. Enviando teste LAZER PLAY...`);
+      await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
+      return;
+    }
+  }
+
   if (msg.hasMedia) {
     if (aguardandoMac.has(phone)) {
       await handleIboImagem(msg, phone, nome);
@@ -578,6 +598,10 @@ client.on("message_create", async (msg) => {
 
   if (isInstrucaoMensagem(corpo)) {
     fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
+  }
+  if (isInstrucaoLazer(corpo)) {
+    aguardandoLazerFollowup.set(phone, { createdAt: Date.now() });
+    console.log(`[LAZER] Instrucao detectada para ${phone}. Aguardando a proxima mensagem do cliente para enviar o teste.`);
   }
 
   let labels = [];
