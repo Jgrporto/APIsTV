@@ -27,6 +27,52 @@ const FORM_DATA = {
   notesValue: ""
 };
 
+async function selecionarModoM3u(page) {
+  const result = await page.evaluate(() => {
+    const preferidas = ["M3U8", "M3U"];
+
+    const acharSelect = () => {
+      const byId = document.querySelector("#modoSelecao");
+      if (byId) return byId;
+
+      const selects = Array.from(document.querySelectorAll("select"));
+      return (
+        selects.find((sel) => {
+          const label =
+            (sel.id && document.querySelector(`label[for="${sel.id}"]`)) ||
+            sel.closest("label") ||
+            sel.parentElement?.querySelector("label");
+          const textoLabel = (label?.textContent || "").toUpperCase();
+          return textoLabel.includes("MODO") && textoLabel.includes("SELE");
+        }) || null
+      );
+    };
+
+    const sel = acharSelect();
+    if (!sel) return { ok: false, reason: "Select 'Modo de selecao' nao encontrado" };
+
+    const opts = Array.from(sel.options || []);
+    const alvo =
+      opts.find((o) => {
+        const texto = (o.textContent || o.value || "").toUpperCase();
+        return preferidas.some((pref) => texto.includes(pref));
+      }) || null;
+
+    if (!alvo) return { ok: false, reason: "Opcao M3U/M3U8 nao encontrada" };
+
+    sel.value = alvo.value;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+
+    return { ok: true, escolhido: (alvo.textContent || alvo.value || "").trim() };
+  });
+
+  if (result.ok) {
+    console.log(`Modo de selecao ajustado para: ${result.escolhido}`);
+  } else {
+    console.log(`Aviso: ${result.reason}`);
+  }
+}
+
 async function dumpLabels(page) {
   const labels = await page.evaluate(() =>
     Array.from(document.querySelectorAll("label")).map((l) => ({
@@ -251,30 +297,14 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
 
     console.log("Login concluido, abrindo tela de cadastro...");
     await page.goto(CREATE_URL, { waitUntil: "networkidle2" });
+    console.log("Ajustando modo de selecao para M3U8...");
+    await selecionarModoM3u(page);
 
     try {
       if (minimalFields) {
         if (!mac || !serverName || !m3uValue) {
           throw new Error("minimalFields requer mac, serverName e m3uValue preenchidos");
         }
-
-        // Seleciona modo MAC, preenche campos principais por seletor direto quando possível
-        await page.evaluate(() => {
-          const sel = document.querySelector("#modoSelecao");
-          if (sel) {
-            const opts = Array.from(sel.options || []);
-            const macOpt = opts.find(
-              (o) =>
-                (o.textContent || "").toUpperCase().includes("MAC") ||
-                (o.value || "").toUpperCase().includes("MAC")
-            );
-            const target = macOpt || opts[0];
-            if (target) {
-              sel.value = target.value;
-              sel.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }
-        });
 
         if (mac) {
           await page.evaluate((value) => {

@@ -198,20 +198,33 @@ function extrairMacDeTexto(texto) {
   if (!texto) return null;
 
   const padroes = [
-    /(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}/g,
+    // formatos comuns com separadores variados (:, -, _, espacos, ponto)
+    /(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}/g,
+    // pares separados somente por espacos
+    /(?:[0-9A-Fa-f]{2}\s+){5}[0-9A-Fa-f]{2}/g,
+    // 12 hex seguidos
     /\b[0-9A-Fa-f]{12}\b/g
   ];
 
   for (const regex of padroes) {
     const encontrado = texto.match(regex);
-    if (encontrado && encontrado.length) {
-      let mac = encontrado[0].replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
-      if (mac.length === 12) {
-        mac = mac.match(/.{1,2}/g).join(":");
-      }
+    if (!encontrado || !encontrado.length) continue;
+
+    let mac = encontrado[0].replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+    if (mac.length >= 12) {
+      mac = mac.slice(0, 12);
+      mac = mac.match(/.{1,2}/g).join(":");
       return mac;
     }
   }
+
+  // fallback: junta todos os hex encontrados no texto e tenta formar 12 caracteres
+  const somenteHex = (texto || "").replace(/[^0-9A-Fa-f]/g, "");
+  if (somenteHex.length >= 12) {
+    const mac = somenteHex.slice(0, 12).match(/.{1,2}/g).join(":").toUpperCase();
+    return mac;
+  }
+
   return null;
 }
 
