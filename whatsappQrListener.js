@@ -19,7 +19,6 @@ const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
 const INSTRUCAO_TRIGGER_2 = "ASSIM QUE ABRIR ME MANDA UM PRINT DO APLICATIVO ABERTO";
 const LAZER_INSTRUCAO_TRIGGER = "CHEGANDO NESSA TELA VOCE ME AVISA AQUI";
 const LAZER_INSTRUCAO_TRIGGER_PLAYLIST = "ASSIM QUE BAIXAR, CLICA NA OPCAO PLAYLIST E ME MANDA UMA FOTO";
-const LAZER_INSTRUCAO_TTL_MS = Number(process.env.LAZER_INSTRUCAO_TTL_MS || 12 * 60 * 60 * 1000); // 12h padrao
 const MSG_INSTRUCAO_CELULAR =
   "Voce vai baixar o aplicativo, instalar e abrir.\n\nAssim que abrir me manda um print do aplicativo aberto";
 const MSG_PEDIR_PRINT =
@@ -46,7 +45,7 @@ function isInstrucaoLazer(texto) {
 }
 const aguardandoMac = new Set();
 const fluxoCelular = new Map(); // { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
-const aguardandoLazerFollowup = new Map(); // phone -> { createdAt }
+const fluxoLazer = new Map(); // phone -> { stage: 'aguardando_foto' | 'aguardando_playlist_click' }
 let latestQr = "";
 const app = express();
 const QR_PORT = process.env.PORT || 3000;
@@ -206,19 +205,58 @@ function extrairMacDeTexto(texto) {
     .replace(/[Il]/g, "1");
 
   const macRegex = /(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}(?![\s:\-._]*[0-9A-Fa-f])/g;
+  const contiguousRegex = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])/g;
+
+  const candidates = [];
+
+  const pushCandidate = (raw) => {
+    if (!raw) return;
+    const mac = raw.replace(/[^0-9A-F]/gi, "").toUpperCase();
+    if (mac.length !== 12) return;
+    candidates.push(mac.match(/.{2}/g).join(":"));
+  };
+
   const matches = cleaned.match(macRegex);
-  if (matches?.length) {
-    const mac = matches[0].replace(/[^0-9A-F]/gi, "").toUpperCase();
-    return mac.match(/.{2}/g).join(":");
-  }
+  if (matches?.length) matches.forEach(pushCandidate);
 
-  const tokens = cleaned.match(/[0-9A-F]{2}/gi) || [];
-  for (let i = 0; i + 5 < tokens.length; i++) {
-    const candidate = tokens.slice(i, i + 6).map((t) => t.toUpperCase()).join(":");
-    if (candidate) return candidate;
-  }
+  const contiguous = cleaned.match(contiguousRegex);
+  if (contiguous?.length) contiguous.forEach(pushCandidate);
 
-  return null;
+  if (!candidates.length) return null;
+
+  // Escolhe o MAC mais provavel: proximidade de "MAC" e comprimento exato 17 com separadores
+  const textoUpper = cleaned.toUpperCase();
+  const macIndex = textoUpper.indexOf("MAC");
+
+  const score = (mac) => {
+    const macWithColons = mac;
+    const pos = textoUpper.indexOf(macWithColons);
+    const hasExactLen = macWithColons.length === 17;
+    let s = 0;
+    if (hasExactLen) s += 3;
+    if (pos >= 0 && macIndex >= 0) s += Math.max(0, 5 - Math.abs(pos - macIndex) / 5);
+    if (pos >= 0) s += 1;
+    return s;
+  };
+
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates[0] || null;
+}
+
+async function lerTextoDaImagem(msg) {
+  if (!msg.hasMedia) return { ok: false, texto: "" };
+
+  const media = await msg.downloadMedia();
+  if (!media?.data) return { ok: false, texto: "" };
+
+  const buffer = Buffer.from(media.data, "base64");
+  const ocr = await Tesseract.recognize(buffer, "eng").catch((err) => {
+    console.error("Falha no OCR:", err.message);
+    return null;
+  });
+
+  const texto = ocr?.data?.text || "";
+  return { ok: !!texto.trim(), texto };
 }
 
 async function lerMacDaImagem(msg) {
@@ -234,7 +272,21 @@ async function lerMacDaImagem(msg) {
   });
 
   const texto = ocr?.data?.text || "";
-  const mac = extrairMacDeTexto(texto);
+  let mac = extrairMacDeTexto(texto);
+
+  // Fallback: reforca whitelist para tentar evitar ruidos aleatorios
+  if (!mac) {
+    const ocrFallback = await Tesseract.recognize(buffer, "eng", {
+      tessedit_char_whitelist: "0123456789ABCDEFabcdef:",
+      preserve_interword_spaces: "1",
+      tessedit_pageseg_mode: "6"
+    }).catch((err) => {
+      console.error("Falha no OCR fallback:", err.message);
+      return null;
+    });
+    const textoFallback = ocrFallback?.data?.text || "";
+    mac = extrairMacDeTexto(textoFallback || texto);
+  }
 
   return { ok: !!mac, mac, rawText: texto };
 }
@@ -270,7 +322,10 @@ async function gerarTeste(cliente, nome = "Cliente", appEscolhido = "") {
   const res = await axios.post(
     "https://painel.newbr.top/api/chatbot/V01pz25DdO/o231qzL4qz",
     payload,
-    { headers: { "Content-Type": "application/json" } }
+    {
+      headers: { "Content-Type": "application/json" },
+      auth: { username: "vendaiptv", password: "suporte+TV1" }
+    }
   );
 
   return res.data.reply;
@@ -294,12 +349,17 @@ async function responderComTeste(msg, phone, nome, keyword, appNome) {
     return;
   }
 
-  const filtrado = filtrarBloco(reply, keyword);
+  let filtrado = filtrarBloco(reply, keyword);
 
   if (!filtrado) {
     await msg.reply(`Nao encontrei conteudo para ${keyword}.`);
     return;
   }
+
+  // Remove palavras-chave antes de enviar ao cliente
+  const keywordRegex = new RegExp(keyword, "gi");
+  const comandoRegex = new RegExp(COMMANDS.LAZER, "gi");
+  filtrado = filtrado.replace(keywordRegex, "").replace(comandoRegex, "").trim();
 
   await msg.reply(filtrado);
   console.log(`[${appNome}] Teste enviado para ${phone}`);
@@ -414,6 +474,14 @@ function textoNao(textoLower) {
   });
 }
 
+function textoConfirmacaoLazer(textoLower) {
+  const termos = ["consegui", "baixei", "abri", "abri agora", "abri o app", "abri o aplicativo", "sim"];
+  return termos.some((k) => {
+    const re = new RegExp(`\\b${k}\\b`, "i");
+    return re.test(textoLower);
+  });
+}
+
 async function concluirFluxoCelular(msg, phone, nome, macFromMedia) {
   const estado = fluxoCelular.get(phone) || {};
   const mac = macFromMedia || estado.mac;
@@ -506,6 +574,66 @@ async function handleFluxoCelular(msg, phone, nome, textoLower) {
   return false;
 }
 
+async function handleFluxoLazerImagem(msg, phone, nome) {
+  const leitura = await lerTextoDaImagem(msg);
+  if (!leitura.ok) {
+    await msg.reply("Nao consegui ler a imagem. Envie uma foto mais nitida da tela da TV, por favor.");
+    return true;
+  }
+
+  const textoUpper = (leitura.texto || "").toUpperCase();
+  const hasPlaylist = textoUpper.includes("PLAYLIST");
+  const hasLista = textoUpper.includes("LISTA");
+  const hasCodigo = textoUpper.includes("CODIGO") || textoUpper.includes("CODE");
+
+  if ((hasPlaylist || hasLista) && !hasCodigo) {
+    fluxoLazer.set(phone, { stage: "aguardando_playlist_click" });
+    await msg.reply("Aperta na opcao Playlist/Lista e me envia a tela seguinte para liberar o teste.");
+    return true;
+  }
+
+  if ((hasPlaylist || hasLista) && hasCodigo) {
+    fluxoLazer.delete(phone);
+    await msg.reply("Gerando o teste. Use o codigo enviado para preencher no app.");
+    await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
+    return true;
+  }
+
+  if (hasCodigo) {
+    fluxoLazer.delete(phone);
+    await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
+    return true;
+  }
+
+  await msg.reply("Preciso da tela do app (menu ou tela de adicionar lista). Envie uma foto nA-tida, por favor.");
+  return true;
+}
+
+async function handleFluxoLazerMensagem(msg, phone, textoLower) {
+  const estado = fluxoLazer.get(phone);
+  if (!estado) return false;
+
+  if (estado.stage === "aguardando_playlist_click") {
+    await msg.reply("Clica na opcao Playlist e me envia a tela seguinte, por favor.");
+    return true;
+  }
+
+  if (textoConfirmacaoLazer(textoLower)) {
+    await msg.reply("Beleza! Me envia uma foto da tela da TV para seguirmos o fluxo.");
+  } else {
+    await msg.reply("So um momento que ja te respondo, por favor.");
+  }
+
+  return true;
+}
+
+async function iniciarFluxoLazer(msg, phone) {
+  fluxoLazer.set(phone, { stage: "aguardando_foto" });
+  if (msg) {
+    await msg.reply("Vamos seguir. Envie uma foto da tela da TV do app para continuar.");
+  }
+}
+
 async function processMessage(msg) {
   const phone = cleanPhone(msg.from);
 
@@ -517,23 +645,17 @@ async function processMessage(msg) {
 
   console.log(`[MSG] ${phone} (${nome}): ${texto}`);
 
-  const estadoLazer = aguardandoLazerFollowup.get(phone);
-  if (estadoLazer) {
-    const expirou = Date.now() - estadoLazer.createdAt > LAZER_INSTRUCAO_TTL_MS;
-    if (expirou) {
-      aguardandoLazerFollowup.delete(phone);
-    } else {
-      aguardandoLazerFollowup.delete(phone);
-      console.log(`[LAZER] Follow-up detectado para ${phone}. Enviando teste LAZER PLAY...`);
-      await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
-      return;
-    }
-  }
+  const estadoLazer = fluxoLazer.get(phone);
 
   if (msg.hasMedia) {
-    const comandoMidia = texto.toUpperCase().includes(COMMANDS.IBO);
+    const comandoMidiaIbo = texto.toUpperCase().includes(COMMANDS.IBO);
 
-    if (aguardandoMac.has(phone) || comandoMidia) {
+    if (estadoLazer) {
+      await handleFluxoLazerImagem(msg, phone, nome);
+      return;
+    }
+
+    if (aguardandoMac.has(phone) || comandoMidiaIbo) {
       await handleIboImagem(msg, phone, nome);
       return;
     }
@@ -554,15 +676,15 @@ async function processMessage(msg) {
     return;
   }
 
+  if (estadoLazer) {
+    const handledLazer = await handleFluxoLazerMensagem(msg, phone, textoLower);
+    if (handledLazer) return;
+  }
+
   const comando = texto.toUpperCase();
 
   if (comando.includes(COMMANDS.ASSIST)) {
     await responderComTeste(msg, phone, nome, KEYWORD_ASSIST, "ASSIST");
-    return;
-  }
-
-  if (comando.includes(COMMANDS.LAZER)) {
-    await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
     return;
   }
 
@@ -668,8 +790,8 @@ client.on("message_create", async (msg) => {
     fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
   }
   if (isInstrucaoLazer(corpo)) {
-    aguardandoLazerFollowup.set(phone, { createdAt: Date.now() });
-    console.log(`[LAZER] Instrucao detectada para ${phone}. Aguardando a proxima mensagem do cliente para enviar o teste.`);
+    await iniciarFluxoLazer(null, phone);
+    console.log(`[LAZER] Instrucao detectada para ${phone}. Aguardando a foto do cliente para seguir com o teste.`);
   }
 
   let labels = [];
@@ -706,6 +828,11 @@ client.on("message_create", async (msg) => {
         await msg.reply("Marque a imagem com o MAC ou envie o MAC junto ao #IBO.");
       }
     }
+  }
+
+  // Permite acionar #LAZER apenas em mensagens enviadas (fromMe)
+  if (corpoUpper.includes(COMMANDS.LAZER)) {
+    await iniciarFluxoLazer(msg, phone);
   }
 
   const timestamp = new Date().toISOString();
@@ -798,4 +925,3 @@ setInterval(() => {
     touchActivity();
   }
 }, Math.max(60000, Math.min(IDLE_LOG_MS, 300000))); // checa entre 1 e 5 minutos
-
