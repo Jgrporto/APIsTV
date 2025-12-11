@@ -200,32 +200,22 @@ function extrairUsuarioDoM3u(m3uUrl) {
 function extrairMacDeTexto(texto) {
   if (!texto) return null;
 
-  const padroes = [
-    // formatos comuns com separadores variados (:, -, _, espacos, ponto)
-    /(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}/g,
-    // pares separados somente por espacos
-    /(?:[0-9A-Fa-f]{2}\s+){5}[0-9A-Fa-f]{2}/g,
-    // 12 hex seguidos
-    /\b[0-9A-Fa-f]{12}\b/g
-  ];
+  const cleaned = (texto || "")
+    .replace(/\bMAC\b\s*[:=\-]?\s*/gi, " ")
+    .replace(/[O]/g, "0")
+    .replace(/[Il]/g, "1");
 
-  for (const regex of padroes) {
-    const encontrado = texto.match(regex);
-    if (!encontrado || !encontrado.length) continue;
-
-    let mac = encontrado[0].replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
-    if (mac.length >= 12) {
-      mac = mac.slice(0, 12);
-      mac = mac.match(/.{1,2}/g).join(":");
-      return mac;
-    }
+  const macRegex = /(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}(?![\s:\-._]*[0-9A-Fa-f])/g;
+  const matches = cleaned.match(macRegex);
+  if (matches?.length) {
+    const mac = matches[0].replace(/[^0-9A-F]/gi, "").toUpperCase();
+    return mac.match(/.{2}/g).join(":");
   }
 
-  // fallback: junta todos os hex encontrados no texto e tenta formar 12 caracteres
-  const somenteHex = (texto || "").replace(/[^0-9A-Fa-f]/g, "");
-  if (somenteHex.length >= 12) {
-    const mac = somenteHex.slice(0, 12).match(/.{1,2}/g).join(":").toUpperCase();
-    return mac;
+  const tokens = cleaned.match(/[0-9A-F]{2}/gi) || [];
+  for (let i = 0; i + 5 < tokens.length; i++) {
+    const candidate = tokens.slice(i, i + 6).map((t) => t.toUpperCase()).join(":");
+    if (candidate) return candidate;
   }
 
   return null;
@@ -808,3 +798,4 @@ setInterval(() => {
     touchActivity();
   }
 }, Math.max(60000, Math.min(IDLE_LOG_MS, 300000))); // checa entre 1 e 5 minutos
+
