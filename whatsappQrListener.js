@@ -16,6 +16,7 @@ const COMMANDS = {
   IBO: "#IBO"
 };
 const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
+const INSTRUCAO_TRIGGER_2 = "ASSIM QUE ABRIR ME MANDA UM PRINT DO APLICATIVO ABERTO";
 const LAZER_INSTRUCAO_TRIGGER = "CHEGANDO NESSA TELA VOCE ME AVISA AQUI";
 const LAZER_INSTRUCAO_TRIGGER_PLAYLIST = "ASSIM QUE BAIXAR, CLICA NA OPCAO PLAYLIST E ME MANDA UMA FOTO";
 const LAZER_INSTRUCAO_TTL_MS = Number(process.env.LAZER_INSTRUCAO_TTL_MS || 12 * 60 * 60 * 1000); // 12h padrao
@@ -24,6 +25,7 @@ const MSG_INSTRUCAO_CELULAR =
 const MSG_PEDIR_PRINT =
   "Preciso do print do app aberto para liberar o teste. Pode me enviar a imagem da tela aberta, por favor?";
 const MSG_TESTE_ATIVO = "Aguarde um momento que um atendente vai falar com voce.";
+const MSG_TESTE_IBO_OK = "Seu teste foi gerado! Fecha o app e abre novamente.";
 
 
 function normalizeInstrucao(str) {
@@ -31,7 +33,8 @@ function normalizeInstrucao(str) {
 }
 
 function isInstrucaoMensagem(texto) {
-  return normalizeInstrucao(texto).includes(INSTRUCAO_TRIGGER);
+  const norm = normalizeInstrucao(texto);
+  return norm.includes(INSTRUCAO_TRIGGER) || norm.includes(INSTRUCAO_TRIGGER_2);
 }
 
 function isInstrucaoLazer(texto) {
@@ -313,16 +316,12 @@ async function responderComTeste(msg, phone, nome, keyword, appNome) {
   scheduleFollowup(msg.from, nome);
 }
 
-async function handleIboImagem(msg, phone, nome) {
-  const leitura = await lerMacDaImagem(msg);
-
-  if (!leitura.ok || !leitura.mac) {
-    await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis.");
+async function iniciarTesteIbo(mac, msg, phone, nome) {
+  const macSanitized = (mac || "").trim();
+  if (!macSanitized) {
+    await msg.reply("MAC nao identificado. Envie a imagem com o MAC visivel, por favor.");
     return;
   }
-
-  aguardandoMac.delete(phone);
-  console.log(`[IBO] MAC detectado (${phone} - ${nome}): ${leitura.mac}`);
 
   const reply = await gerarTesteSeguro(phone, nome, "IBO");
   if (!reply) {
@@ -343,11 +342,11 @@ async function handleIboImagem(msg, phone, nome) {
 
   const username = extrairUsuarioDoM3u(m3u) || nome || phone;
   const serverName = `TVAUTO ${username || "Cliente"}`;
-  const observacoes = `Teste Gerado via Chatbot\nMAC: ${leitura.mac}`;
+  const observacoes = `Teste Gerado via Chatbot\nMAC: ${macSanitized}`;
 
   try {
     await criarUsuarioGerenciaAppComM3u(m3u, {
-      mac: leitura.mac,
+      mac: macSanitized,
       serverName,
       app: "IBO",
       nome,
@@ -361,8 +360,54 @@ async function handleIboImagem(msg, phone, nome) {
     return;
   }
 
-  await msg.reply("Teste Liberado, pode abrir o app agora?");
-  scheduleFollowup(msg.from, nome);
+  await msg.reply(MSG_TESTE_IBO_OK);
+  if (msg?.from) {
+    scheduleFollowup(msg.from, nome);
+  }
+}
+
+async function handleIboImagem(msg, phone, nome) {
+  const leitura = await lerMacDaImagem(msg);
+
+  if (!leitura.ok || !leitura.mac) {
+    await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis.");
+    return;
+  }
+
+  aguardandoMac.delete(phone);
+  console.log(`[IBO] MAC detectado (${phone} - ${nome}): ${leitura.mac}`);
+  await iniciarTesteIbo(leitura.mac, msg, phone, nome);
+}
+
+async function handleIboMensagemMarcada(msg, phone, nome) {
+  if (!msg.hasQuotedMsg) {
+    console.log(`[IBO] Mensagem ${msg.id?._serialized || ""} sem quotedMsg para ${phone}`);
+    return false;
+  }
+
+  const quoted = await msg.getQuotedMessage().catch((err) => {
+    console.log("[IBO] Falha ao obter quotedMsg:", err?.message);
+    return null;
+  });
+  if (!quoted) return false;
+
+  if (!quoted.hasMedia) {
+    console.log(`[IBO] QuotedMsg sem media para ${phone}`);
+    await msg.reply("A mensagem marcada nao tem imagem. Encaminhe a imagem com o MAC ou envie novamente marcando a foto.");
+    return true;
+  }
+
+  const leitura = await lerMacDaImagem(quoted);
+  if (!leitura.ok || !leitura.mac) {
+    console.log(`[IBO] OCR falhou em quotedMsg para ${phone}`);
+    await msg.reply("Nao consegui ler o MAC na mensagem marcada. Envie outra foto com os dados bem visiveis.");
+    return true;
+  }
+
+  aguardandoMac.delete(phone);
+  console.log(`[IBO] MAC detectado de mensagem marcada (${phone} - ${nome}): ${leitura.mac}`);
+  await iniciarTesteIbo(leitura.mac, msg, phone, nome);
+  return true;
 }
 
 function textoSim(textoLower) {
@@ -496,7 +541,9 @@ async function processMessage(msg) {
   }
 
   if (msg.hasMedia) {
-    if (aguardandoMac.has(phone)) {
+    const comandoMidia = texto.toUpperCase().includes(COMMANDS.IBO);
+
+    if (aguardandoMac.has(phone) || comandoMidia) {
       await handleIboImagem(msg, phone, nome);
       return;
     }
@@ -530,6 +577,18 @@ async function processMessage(msg) {
   }
 
   if (comando.includes(COMMANDS.IBO)) {
+    console.log(`[IBO] Comando detectado para ${phone} (${nome}). hasQuotedMsg=${msg.hasQuotedMsg}`);
+
+    const macInline = extrairMacDeTexto(texto);
+    if (macInline) {
+      console.log(`[IBO] MAC em texto detectado (${phone} - ${nome}): ${macInline}`);
+      await iniciarTesteIbo(macInline, msg, phone, nome);
+      return;
+    }
+
+    const handledQuoted = await handleIboMensagemMarcada(msg, phone, nome);
+    if (handledQuoted) return;
+
     aguardandoMac.add(phone);
     console.log(`[IBO] Aguardando imagem com MAC de ${phone} (${nome})`);
     await msg.reply("Envie a imagem contendo o MAC do dispositivo para continuar.");
@@ -611,6 +670,7 @@ client.on("message_create", async (msg) => {
 
   const phone = cleanPhone(msg.to || msg.from);
   const corpo = (msg.body || "").trim();
+  const corpoUpper = corpo.toUpperCase();
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
 
@@ -642,6 +702,21 @@ client.on("message_create", async (msg) => {
     contact?.number ||
     phone ||
     "Cliente";
+
+  // Permite acionar #IBO via mensagem enviada (resposta marcada ou MAC inline)
+  if (corpoUpper.includes(COMMANDS.IBO)) {
+    console.log(`[IBO] Comando enviado (fromMe) para ${phone} (${nome}). hasQuotedMsg=${msg.hasQuotedMsg}`);
+
+    const macInline = extrairMacDeTexto(corpo);
+    if (macInline) {
+      await iniciarTesteIbo(macInline, msg, phone, nome);
+    } else {
+      const handled = await handleIboMensagemMarcada(msg, phone, nome);
+      if (!handled) {
+        await msg.reply("Marque a imagem com o MAC ou envie o MAC junto ao #IBO.");
+      }
+    }
+  }
 
   const timestamp = new Date().toISOString();
 
