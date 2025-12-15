@@ -1,4 +1,4 @@
-import wweb from "whatsapp-web.js";
+﻿import wweb from "whatsapp-web.js";
 import qrcode from "qrcode-terminal";
 import axios from "axios";
 import Tesseract from "tesseract.js";
@@ -154,7 +154,7 @@ function filtrarBloco(texto, keyword) {
   if (!texto) return "";
   const linhas = texto.split(/\r?\n/);
   const keywordUpper = keyword.toUpperCase();
-  const headerRegex = /^[🟢🟡🟣🟠🔴]/;
+  const headerRegex = /^[ðŸŸ¢ðŸŸ¡ðŸŸ£ðŸŸ ðŸ”´]/;
 
   let capturando = false;
   const resultado = [];
@@ -204,15 +204,16 @@ function extrairMacDeTexto(texto) {
     .replace(/[O]/g, "0")
     .replace(/[Il]/g, "1");
 
-  const macRegex = /(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}(?![\s:\-._]*[0-9A-Fa-f])/g;
-  const contiguousRegex = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{12}(?![0-9A-Fa-f])/g;
+  const macRegex = /(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[\s:\-._]){5}[0-9A-Fa-f]{2}/g;
+  const contiguousRegex = /[0-9A-Fa-f]{12,14}/g;
 
   const candidates = [];
 
   const pushCandidate = (raw) => {
     if (!raw) return;
-    const mac = raw.replace(/[^0-9A-F]/gi, "").toUpperCase();
-    if (mac.length !== 12) return;
+    let mac = raw.replace(/[^0-9A-F]/gi, "").toUpperCase();
+    if (mac.length < 12) return;
+    if (mac.length > 12) mac = mac.slice(0, 12); // tolera lixo apos o MAC (ex.: "....AD 150")
     candidates.push(mac.match(/.{2}/g).join(":"));
   };
 
@@ -273,6 +274,8 @@ async function lerMacDaImagem(msg) {
 
   const texto = ocr?.data?.text || "";
   let mac = extrairMacDeTexto(texto);
+  let reason = "";
+  let textoFallback = "";
 
   // Fallback: reforca whitelist para tentar evitar ruidos aleatorios
   if (!mac) {
@@ -284,11 +287,17 @@ async function lerMacDaImagem(msg) {
       console.error("Falha no OCR fallback:", err.message);
       return null;
     });
-    const textoFallback = ocrFallback?.data?.text || "";
+    textoFallback = ocrFallback?.data?.text || "";
     mac = extrairMacDeTexto(textoFallback || texto);
+
+    if (!mac) {
+      const base = (textoFallback || texto || "").trim();
+      const hasText = !!base;
+      reason = hasText ? "Nenhum padrao de MAC encontrado no texto extraido" : "OCR vazio (sem texto legivel)";
+    }
   }
 
-  return { ok: !!mac, mac, rawText: texto };
+  return { ok: !!mac, mac, rawText: texto, rawTextFallback: textoFallback, reason };
 }
 
 function montarMensagemTeste(appEscolhido, nome, phone) {
@@ -320,7 +329,7 @@ async function gerarTeste(cliente, nome = "Cliente", appEscolhido = "") {
   };
 
   const res = await axios.post(
-    "https://painel.newbr.top/api/chatbot/V01pz25DdO/o231qzL4qz",
+    "https://painel.newbr.top/api/chatbot/ywDmJeJWpR/o231qzL4qz",
     payload,
     {
       headers: { "Content-Type": "application/json" },
@@ -420,6 +429,9 @@ async function handleIboImagem(msg, phone, nome) {
   const leitura = await lerMacDaImagem(msg);
 
   if (!leitura.ok || !leitura.mac) {
+    if (leitura.reason) {
+      console.log(`[IBO] OCR nao encontrou MAC (${phone} - ${nome}). Motivo: ${leitura.reason}`);
+    }
     await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis.");
     return;
   }
@@ -450,6 +462,9 @@ async function handleIboMensagemMarcada(msg, phone, nome) {
   const leitura = await lerMacDaImagem(quoted);
   if (!leitura.ok || !leitura.mac) {
     console.log(`[IBO] OCR falhou em quotedMsg para ${phone}`);
+    if (leitura.reason) {
+      console.log(`[IBO] Motivo: ${leitura.reason}`);
+    }
     await msg.reply("Nao consegui ler o MAC na mensagem marcada. Envie outra foto com os dados bem visiveis.");
     return true;
   }
@@ -468,7 +483,7 @@ function textoSim(textoLower) {
 }
 
 function textoNao(textoLower) {
-  return ["nao", "não", "n", "no", "negativo"].some((k) => {
+  return ["nao", "nÃ£o", "n", "no", "negativo"].some((k) => {
     const re = new RegExp(`\\b${k}\\b`, "i");
     return re.test(textoLower);
   });
@@ -668,6 +683,9 @@ async function processMessage(msg) {
         console.log(`[CELULAR] MAC detectado (${phone} - ${nome}): ${leitura.mac}`);
         await concluirFluxoCelular(msg, phone, nome, leitura.mac);
       } else {
+        if (leitura.reason) {
+          console.log(`[CELULAR] OCR nao encontrou MAC (${phone} - ${nome}). Motivo: ${leitura.reason}`);
+        }
         fluxoCelular.delete(phone);
         await msg.reply("Nao consegui identificar o MAC. Um atendente vai te chamar para finalizar, tudo bem?");
       }
@@ -756,7 +774,7 @@ client.on("message", async (msg) => {
     contact?.verifiedName || // nome oficial/WhatsApp Business
     contact?.pushname || // nome exibido
     contact?.shortName ||
-    chat?.name || // título do chat (costuma trazer o nome salvo)
+    chat?.name || // tÃ­tulo do chat (costuma trazer o nome salvo)
     contact?.businessProfile?.tag || // fallback de tag de perfil
     contact?.number ||
     phone ||
@@ -775,7 +793,7 @@ client.on("message", async (msg) => {
   );
 });
 
-// Log estruturado para mensagens enviadas pela própria conta
+// Log estruturado para mensagens enviadas pela prÃ³pria conta
 client.on("message_create", async (msg) => {
   if (!msg.fromMe) return;
   touchActivity();
@@ -871,7 +889,7 @@ app.get("/qr", (_req, res) => {
     <div class="card">
       <h2>Escaneie o QR do WhatsApp</h2>
       <div id="qrcode"></div>
-      <div class="info">A página atualiza a cada 6s enquanto um novo QR estiver disponível.</div>
+      <div class="info">A pÃ¡gina atualiza a cada 6s enquanto um novo QR estiver disponÃ­vel.</div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script>
@@ -883,7 +901,7 @@ app.get("/qr", (_req, res) => {
           height: 280
         });
       } else {
-        document.getElementById("qrcode").innerHTML = "<p>QR ainda não gerado.</p>";
+        document.getElementById("qrcode").innerHTML = "<p>QR ainda nÃ£o gerado.</p>";
       }
     </script>
   </body>
@@ -899,7 +917,7 @@ app.listen(QR_PORT, () => {
   console.log(`Servidor de QR em http://localhost:${QR_PORT}/qr`);
 });
 
-// Ping periódico opcional para manter o serviço acordado (defina SELF_PING_URL)
+// Ping periÃ³dico opcional para manter o serviÃ§o acordado (defina SELF_PING_URL)
 function startKeepAlive() {
   if (!SELF_PING_URL) {
     console.log("Keep-alive desativado (defina SELF_PING_URL para habilitar).");
