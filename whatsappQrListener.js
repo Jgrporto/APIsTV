@@ -10,10 +10,14 @@ const { Client, LocalAuth } = wweb;
 const DEVICE_PHONE = "5524999162165";
 const KEYWORD_ASSIST = "ASSIST PLUS";
 const KEYWORD_LAZER = "LAZER PLAY";
+const KEYWORD_FUN = "FUN PLAY";
+const KEYWORD_PLAYSIM = "PLAYSIM";
 const COMMANDS = {
   ASSIST: "#ASSIST",
   LAZER: "#LAZER",
-  IBO: "#IBO"
+  IBO: "#IBO",
+  FUN: "#FUN",
+  PLAYSIM: "#PLAYSIM"
 };
 const INSTRUCAO_TRIGGER = "VOCE VAI BAIXAR O APLICATIVO, INSTALAR E ABRIR";
 const INSTRUCAO_TRIGGER_2 = "ASSIM QUE ABRIR ME MANDA UM PRINT DO APLICATIVO ABERTO";
@@ -58,6 +62,11 @@ let lastActivity = Date.now();
 const touchActivity = () => {
   lastActivity = Date.now();
 };
+
+function logFluxoIdentificado(tipo, phone, nome) {
+  const safeTipo = (tipo || "N/A").toUpperCase();
+  console.log(`FLUXO IDENTIFICADO (${safeTipo}) AGUARDANDO INSTRUÇÕES DO CLIENTE - ${phone} (${nome || "Cliente"})`);
+}
 function resolveNome(contact, chat, phone) {
   return (
     contact?.verifiedName ||
@@ -71,6 +80,28 @@ function resolveNome(contact, chat, phone) {
     "Cliente"
   );
 }
+
+function resolveAppName(appEscolhido = "") {
+  const app = (appEscolhido || "").trim();
+  if (!app) return "com.whatsapp";
+  const lower = app.toLowerCase();
+  if (lower.includes("assist")) return "assist";
+  if (lower.includes("lazer")) return "lazer play";
+  if (lower.includes("fun")) return "fun play";
+  if (lower.includes("playsim")) return "playsim";
+  if (lower.includes("ibo")) return "ibo revenda";
+  if (lower.includes("celular")) return "celular";
+  return lower;
+}
+
+const APP_PROFILES = {
+  ASSIST: { keyword: KEYWORD_ASSIST, appName: "assist", display: "🟡 ASSIST PLUS", code: "centertv" },
+  LAZER: { keyword: KEYWORD_LAZER, appName: "lazer play", display: "🟡 LAZER PLAY", code: "br99" },
+  // FUN usa o mesmo bloco/credencial do LAZER, apenas troca o título exibido
+  FUN: { keyword: KEYWORD_LAZER, appName: "lazer play", display: "🟡 FUN PLAY", code: "br99" },
+  // PLAYSIM busca o bloco do ASSIST, mas exibe título PLAYSIM
+  PLAYSIM: { keyword: KEYWORD_ASSIST, appName: "playsim", display: "🟡 PLAYSIM", code: "centertv" }
+};
 
 function nomeSeguro(nome, phone) {
   const n = (nome || "").trim();
@@ -111,9 +142,9 @@ function scheduleFollowup(chatId, nome) {
   followupTimers.set(targetId, timer);
 }
 
-async function gerarTesteSeguro(cliente, nome = "Cliente", appEscolhido = "") {
+async function gerarTesteSeguro(cliente, nome = "Cliente", appEscolhido = "", mac) {
   try {
-    return await gerarTeste(cliente, nome, appEscolhido);
+    return await gerarTeste(cliente, nome, appEscolhido, mac);
   } catch (err) {
     console.error("[Teste] Falha ao gerar teste:", err.message);
     return null;
@@ -300,32 +331,36 @@ async function lerMacDaImagem(msg) {
   return { ok: !!mac, mac, rawText: texto, rawTextFallback: textoFallback, reason };
 }
 
-function montarMensagemTeste(appEscolhido, nome, phone) {
+function montarMensagemTeste(appEscolhido, nome, phone, mac) {
+  const appName = resolveAppName(appEscolhido);
+  const appLine = mac && appName === "ibo revenda" ? `${appName.toUpperCase()} - MAC ${mac}` : appName.toUpperCase();
   const linhas = [
-    "gerar teste",
-    "TESTE ATIVADO VIA CHATBOT",
-    `APLICATIVO ESCOLHIDO: ${appEscolhido || "N/A"}`,
+    "Gerado com ChatBot",
+    `App: ${appLine || "N/A"}`,
     `NOME: ${nome || "Cliente"}`,
-    `WHATSAPP: ${phone || ""}`
+    `WHATSAPP: ${phone || ""}`,
+    "User-Agent: +TVBot"
   ];
 
   return linhas.join("\n");
 }
 
-async function gerarTeste(cliente, nome = "Cliente", appEscolhido = "") {
-  const nomeFinal = nomeSeguro(nome, cliente);
+async function gerarTeste(cliente, nome = "Cliente", appEscolhido = "", mac) {
+  const phoneClean = cleanPhone(cliente);
+  const nomeFinal = nomeSeguro(nome, phoneClean);
+  const appName = resolveAppName(appEscolhido);
   const payload = {
-    appName: "com.whatsapp",
+    appName,
     messageDateTime: Math.floor(Date.now() / 1000),
     devicePhone: DEVICE_PHONE,
     deviceName: "Emex Device",
     senderName: nomeFinal,
-    senderMessage: montarMensagemTeste(appEscolhido, nomeFinal, cliente),
-    senderPhone: cliente,
-    userAgent: "BotBot.Chat",
+    senderMessage: montarMensagemTeste(appName, nomeFinal, phoneClean, mac),
+    senderPhone: phoneClean,
+    userAgent: "+TVBot",
     // Campos extras para o painel: nome e whatsapp do cliente
     customerName: nomeFinal,
-    customerWhatsapp: cliente
+    customerWhatsapp: phoneClean
   };
 
   const res = await axios.post(
@@ -346,8 +381,32 @@ function detectouLimite(texto) {
   return normalizado.includes("ja solicitou");
 }
 
-async function responderComTeste(msg, phone, nome, keyword, appNome) {
-  const reply = await gerarTesteSeguro(phone, nome, appNome);
+function extrairCredenciais(bloco) {
+  if (!bloco) return {};
+  const lines = bloco.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let codigo, usuario, senha;
+
+  for (const line of lines) {
+    const cleanLine = line.replace(/[*_]/g, "");
+    if (!codigo) {
+      const mCod = cleanLine.match(/cod(?:igo)?[:=\-]?\s*([^\s]+)/i);
+      if (mCod) codigo = mCod[1];
+    }
+    if (!usuario) {
+      const mUser = cleanLine.match(/(?:usuario|usuário|user|login)[:=\-]?\s*(.+)/i);
+      if (mUser) usuario = mUser[1].trim();
+    }
+    if (!senha) {
+      const mPass = cleanLine.match(/(?:senha|password|pass)[:=\-]?\s*(.+)/i);
+      if (mPass) senha = mPass[1].trim();
+    }
+  }
+  return { codigo, usuario, senha };
+}
+
+async function responderComTeste(msg, phone, nome, profile, mac) {
+  const { keyword, appName, display, code: defaultCode } = profile;
+  const reply = await gerarTesteSeguro(phone, nome, appName, mac);
   if (!reply) {
     await msg.reply("So um momento! Vou chamar um dos atendentes.");
     return;
@@ -365,13 +424,28 @@ async function responderComTeste(msg, phone, nome, keyword, appNome) {
     return;
   }
 
-  // Remove palavras-chave antes de enviar ao cliente
+  // Remove palavras-chave e comandos antes de enviar ao cliente
   const keywordRegex = new RegExp(keyword, "gi");
-  const comandoRegex = new RegExp(COMMANDS.LAZER, "gi");
-  filtrado = filtrado.replace(keywordRegex, "").replace(comandoRegex, "").trim();
+  const comandosRegex = new RegExp(
+    `${COMMANDS.LAZER}|${COMMANDS.ASSIST}|${COMMANDS.FUN}|${COMMANDS.PLAYSIM}`,
+    "gi"
+  );
+  filtrado = filtrado.replace(keywordRegex, "").replace(comandosRegex, "").trim();
 
-  await msg.reply(filtrado);
-  console.log(`[${appNome}] Teste enviado para ${phone}`);
+  const cred = extrairCredenciais(filtrado);
+  const codigoFinal = cred.codigo || defaultCode;
+
+  if (cred.usuario || cred.senha || codigoFinal) {
+    const partes = [display, ""];
+    if (codigoFinal) partes.push(`✅   Cod: ${codigoFinal}`);
+    if (cred.usuario) partes.push(`✅  *Usuário:* ${cred.usuario}`);
+    if (cred.senha) partes.push(`✅  *Senha:* ${cred.senha}`);
+    await msg.reply(partes.join("\n"));
+  } else {
+    await msg.reply(filtrado);
+  }
+
+  console.log(`[${appName}] Teste enviado para ${phone}`);
   scheduleFollowup(msg.from, nome);
 }
 
@@ -382,7 +456,7 @@ async function iniciarTesteIbo(mac, msg, phone, nome) {
     return;
   }
 
-  const reply = await gerarTesteSeguro(phone, nome, "IBO");
+  const reply = await gerarTesteSeguro(phone, nome, "IBO REVENDA", macSanitized);
   if (!reply) {
     await msg.reply("So um momento! Vou chamar um dos atendentes.");
     return;
@@ -432,7 +506,9 @@ async function handleIboImagem(msg, phone, nome) {
     if (leitura.reason) {
       console.log(`[IBO] OCR nao encontrou MAC (${phone} - ${nome}). Motivo: ${leitura.reason}`);
     }
-    await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis.");
+    aguardandoMac.add(phone);
+    logFluxoIdentificado("IBO - MAC", phone, nome);
+    await msg.reply("Nao consegui ler o MAC. Envie outra foto com os dados bem visiveis ou responda com #IBO + o MAC digitado (ex.: #IBO 00:11:22:33:44:55).");
     return;
   }
 
@@ -610,13 +686,13 @@ async function handleFluxoLazerImagem(msg, phone, nome) {
   if ((hasPlaylist || hasLista) && hasCodigo) {
     fluxoLazer.delete(phone);
     await msg.reply("Gerando o teste. Use o codigo enviado para preencher no app.");
-    await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
+    await responderComTeste(msg, phone, nome, APP_PROFILES.LAZER);
     return true;
   }
 
   if (hasCodigo) {
     fluxoLazer.delete(phone);
-    await responderComTeste(msg, phone, nome, KEYWORD_LAZER, "LAZER");
+    await responderComTeste(msg, phone, nome, APP_PROFILES.LAZER);
     return true;
   }
 
@@ -644,6 +720,7 @@ async function handleFluxoLazerMensagem(msg, phone, textoLower) {
 
 async function iniciarFluxoLazer(msg, phone) {
   fluxoLazer.set(phone, { stage: "aguardando_foto" });
+  logFluxoIdentificado("LAZER", phone, (msg && resolveNome(await msg.getContact().catch(() => null), await msg.getChat().catch(() => null), phone)) || phone);
   if (msg) {
     await msg.reply("Vamos seguir. Envie uma foto da tela da TV do app para continuar.");
   }
@@ -694,15 +771,29 @@ async function processMessage(msg) {
     return;
   }
 
-  if (estadoLazer) {
-    const handledLazer = await handleFluxoLazerMensagem(msg, phone, textoLower);
-    if (handledLazer) return;
-  }
-
   const comando = texto.toUpperCase();
 
-  if (comando.includes(COMMANDS.ASSIST)) {
-    await responderComTeste(msg, phone, nome, KEYWORD_ASSIST, "ASSIST");
+  if (aguardandoMac.has(phone) && comando.includes(COMMANDS.IBO)) {
+    const macInline = extrairMacDeTexto(texto);
+    if (macInline) {
+      aguardandoMac.delete(phone);
+      console.log(`[IBO] MAC em texto detectado (aguardandoMac) ${phone} - ${nome}: ${macInline}`);
+      await iniciarTesteIbo(macInline, msg, phone, nome);
+      return;
+    }
+    await msg.reply("Envie o MAC junto ao #IBO (ex.: #IBO 00:11:22:33:44:55).");
+    return;
+  }
+
+  const perfilComando =
+    comando.includes(COMMANDS.ASSIST) ? APP_PROFILES.ASSIST :
+    comando.includes(COMMANDS.LAZER) ? APP_PROFILES.LAZER :
+    comando.includes(COMMANDS.FUN) ? APP_PROFILES.FUN :
+    comando.includes(COMMANDS.PLAYSIM) ? APP_PROFILES.PLAYSIM :
+    null;
+
+  if (perfilComando) {
+    await responderComTeste(msg, phone, nome, perfilComando);
     return;
   }
 
@@ -720,9 +811,15 @@ async function processMessage(msg) {
     if (handledQuoted) return;
 
     aguardandoMac.add(phone);
+    logFluxoIdentificado("IBO - MAC", phone, nome);
     console.log(`[IBO] Aguardando imagem com MAC de ${phone} (${nome})`);
     await msg.reply("Envie a imagem contendo o MAC do dispositivo para continuar.");
     return;
+  }
+
+  if (estadoLazer) {
+    const handledLazer = await handleFluxoLazerMensagem(msg, phone, textoLower);
+    if (handledLazer) return;
   }
 
   const handledFluxoCelular = await handleFluxoCelular(msg, phone, nome, textoLower);
@@ -803,9 +900,19 @@ client.on("message_create", async (msg) => {
   const corpoUpper = corpo.toUpperCase();
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
+  const nome =
+    contact?.verifiedName ||
+    contact?.pushname ||
+    contact?.shortName ||
+    chat?.name ||
+    contact?.businessProfile?.tag ||
+    contact?.number ||
+    phone ||
+    "Cliente";
 
   if (isInstrucaoMensagem(corpo)) {
     fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
+    logFluxoIdentificado("CELULAR/IBO", phone, nome);
   }
   if (isInstrucaoLazer(corpo)) {
     await iniciarFluxoLazer(null, phone);
@@ -823,16 +930,6 @@ client.on("message_create", async (msg) => {
   labels = (labels || []).filter(Boolean);
   const etiqueta = labels.length ? labels.map((l) => l.name || "").filter(Boolean).join(", ") : "Sem etiqueta";
 
-  const nome =
-    contact?.verifiedName ||
-    contact?.pushname ||
-    contact?.shortName ||
-    chat?.name ||
-    contact?.businessProfile?.tag ||
-    contact?.number ||
-    phone ||
-    "Cliente";
-
   // Permite acionar #IBO via mensagem enviada (resposta marcada ou MAC inline)
   if (corpoUpper.includes(COMMANDS.IBO)) {
     console.log(`[IBO] Comando enviado (fromMe) para ${phone} (${nome}). hasQuotedMsg=${msg.hasQuotedMsg}`);
@@ -848,9 +945,15 @@ client.on("message_create", async (msg) => {
     }
   }
 
-  // Permite acionar #LAZER apenas em mensagens enviadas (fromMe)
-  if (corpoUpper.includes(COMMANDS.LAZER)) {
-    await iniciarFluxoLazer(msg, phone);
+  // Permite acionar testes em mensagens enviadas (fromMe)
+  if (corpoUpper.includes(COMMANDS.ASSIST)) {
+    await responderComTeste(msg, phone, nome, APP_PROFILES.ASSIST);
+  } else if (corpoUpper.includes(COMMANDS.LAZER)) {
+    await responderComTeste(msg, phone, nome, APP_PROFILES.LAZER);
+  } else if (corpoUpper.includes(COMMANDS.FUN)) {
+    await responderComTeste(msg, phone, nome, APP_PROFILES.FUN);
+  } else if (corpoUpper.includes(COMMANDS.PLAYSIM)) {
+    await responderComTeste(msg, phone, nome, APP_PROFILES.PLAYSIM);
   }
 
   const timestamp = new Date().toISOString();
