@@ -75,10 +75,17 @@ function resolveNome(contact, chat, phone) {
     contact?.shortName ||
     chat?.name ||
     contact?.businessProfile?.tag ||
-    contact?.number ||
-    phone ||
-    "Cliente"
+    ""
   );
+}
+
+function resolvePhone(contact, msg) {
+  const raw =
+    contact?.number ||
+    msg?.from ||
+    msg?.to ||
+    "";
+  return cleanPhone(raw);
 }
 
 function resolveAppName(appEscolhido = "") {
@@ -727,10 +734,9 @@ async function iniciarFluxoLazer(msg, phone) {
 }
 
 async function processMessage(msg) {
-  const phone = cleanPhone(msg.from);
-
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
+  const phone = resolvePhone(contact, msg);
   const nome = resolveNome(contact, chat, phone);
   const texto = (msg.body || "").trim();
   const textoLower = texto.toLowerCase();
@@ -826,8 +832,9 @@ async function processMessage(msg) {
   if (handledFluxoCelular) return;
 }
 
+const AUTH_PATH = process.env.WWEB_AUTH_PATH || ".wwebjs_auth";
 const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: ".wwebjs_auth" }),
+  authStrategy: new LocalAuth({ dataPath: AUTH_PATH }),
   puppeteer: {
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"]
@@ -854,9 +861,9 @@ client.on("message", async (msg) => {
   await processMessage(msg).catch((err) => console.error("Erro ao processar mensagem:", err.message));
 
   // Log estruturado conforme modelo solicitado
-  const phone = cleanPhone(msg.from);
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
+  const phone = resolvePhone(contact, msg);
   let labels = [];
   if (chat?.getLabels) {
     try {
@@ -873,9 +880,7 @@ client.on("message", async (msg) => {
     contact?.shortName ||
     chat?.name || // tÃ­tulo do chat (costuma trazer o nome salvo)
     contact?.businessProfile?.tag || // fallback de tag de perfil
-    contact?.number ||
-    phone ||
-    "Cliente";
+    "";
   const corpo = (msg.body || "").trim();
 
   const timestamp = new Date().toISOString();
@@ -895,7 +900,7 @@ client.on("message_create", async (msg) => {
   if (!msg.fromMe) return;
   touchActivity();
 
-  const phone = cleanPhone(msg.to || msg.from);
+  const phone = resolvePhone(await msg.getContact().catch(() => null), msg) || cleanPhone(msg.to || msg.from);
   const corpo = (msg.body || "").trim();
   const corpoUpper = corpo.toUpperCase();
   const contact = await msg.getContact().catch(() => null);
@@ -906,9 +911,7 @@ client.on("message_create", async (msg) => {
     contact?.shortName ||
     chat?.name ||
     contact?.businessProfile?.tag ||
-    contact?.number ||
-    phone ||
-    "Cliente";
+    "";
 
   if (isInstrucaoMensagem(corpo)) {
     fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
