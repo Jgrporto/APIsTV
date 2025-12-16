@@ -79,9 +79,24 @@ function resolveNome(contact, chat, phone) {
   );
 }
 
-function resolvePhone(contact, msg) {
+function resolvePhone(contact, msg, chat) {
+  const chatId = chat?.id?._serialized || "";
+  const chatUser = chat?.id?.user || "";
+
+  // Quando a mensagem foi enviada por nós (fromMe), queremos o telefone do chat/cliente, não o nosso.
+  if (msg?.fromMe) {
+    const target =
+      msg?.to || // destinatário direto
+      chatId || // id completo do chat
+      chatUser || // apenas o número do chat, quando disponível
+      contact?.number || "";
+    return cleanPhone(target);
+  }
+
   const raw =
     contact?.number ||
+    chatUser ||
+    chatId ||
     msg?.from ||
     msg?.to ||
     "";
@@ -110,9 +125,8 @@ const APP_PROFILES = {
   PLAYSIM: { keyword: KEYWORD_ASSIST, appName: "playsim", display: "🟡 PLAYSIM", code: "centertv" }
 };
 
-function nomeSeguro(nome, phone) {
-  const n = (nome || "").trim();
-  return n || phone || "Cliente";
+function nomeSeguro(nome) {
+  return (nome || "").trim();
 }
 
 function ensureChatId(raw) {
@@ -341,10 +355,11 @@ async function lerMacDaImagem(msg) {
 function montarMensagemTeste(appEscolhido, nome, phone, mac) {
   const appName = resolveAppName(appEscolhido);
   const appLine = mac && appName === "ibo revenda" ? `${appName.toUpperCase()} - MAC ${mac}` : appName.toUpperCase();
+  const nomeLinha = (nome || "").trim();
   const linhas = [
     "Gerado com ChatBot",
     `App: ${appLine || "N/A"}`,
-    `NOME: ${nome || "Cliente"}`,
+    ...(nomeLinha ? [`NOME: ${nomeLinha}`] : []),
     `WHATSAPP: ${phone || ""}`,
     "User-Agent: +TVBot"
   ];
@@ -354,7 +369,7 @@ function montarMensagemTeste(appEscolhido, nome, phone, mac) {
 
 async function gerarTeste(cliente, nome = "Cliente", appEscolhido = "", mac) {
   const phoneClean = cleanPhone(cliente);
-  const nomeFinal = nomeSeguro(nome, phoneClean);
+  const nomeFinal = nomeSeguro(nome);
   const appName = resolveAppName(appEscolhido);
   const payload = {
     appName,
@@ -736,7 +751,7 @@ async function iniciarFluxoLazer(msg, phone) {
 async function processMessage(msg) {
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
-  const phone = resolvePhone(contact, msg);
+  const phone = resolvePhone(contact, msg, chat);
   const nome = resolveNome(contact, chat, phone);
   const texto = (msg.body || "").trim();
   const textoLower = texto.toLowerCase();
@@ -863,7 +878,7 @@ client.on("message", async (msg) => {
   // Log estruturado conforme modelo solicitado
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
-  const phone = resolvePhone(contact, msg);
+  const phone = resolvePhone(contact, msg, chat);
   let labels = [];
   if (chat?.getLabels) {
     try {
@@ -900,7 +915,7 @@ client.on("message_create", async (msg) => {
   if (!msg.fromMe) return;
   touchActivity();
 
-  const phone = resolvePhone(await msg.getContact().catch(() => null), msg) || cleanPhone(msg.to || msg.from);
+  const phone = resolvePhone(await msg.getContact().catch(() => null), msg, await msg.getChat().catch(() => null)) || cleanPhone(msg.to || msg.from);
   const corpo = (msg.body || "").trim();
   const corpoUpper = corpo.toUpperCase();
   const contact = await msg.getContact().catch(() => null);
