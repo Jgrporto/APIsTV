@@ -1291,7 +1291,9 @@ client.on("message_create", async (msg) => {
 client.initialize();
 
 // Servidor simples para exibir o QR em pagina web
-app.get("/", (_req, res) => res.redirect("/qr"));
+app.get("/", (_req, res) => {
+  res.status(200).json({ status: "ok", qr: latestQr ? "available" : "pending" });
+});
 app.get("/qr", (_req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   const html = `<!doctype html>
