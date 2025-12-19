@@ -59,6 +59,7 @@ const aguardandoMac = new Set(); // chatId (compat: permite cliente enviar #IBO 
 const aguardandoMacAgente = new Map(); // chatId -> { phone, nome, fluxo }
 const fluxoCelular = new Map(); // chatId -> { stage: 'aguardando_prova', confirming: bool, mac?: string, printReminderSent?: bool }
 const fluxoLazer = new Map(); // chatId -> { stage: 'aguardando_foto' | 'aguardando_playlist_click' }
+const chatIdPhoneCache = new Map(); // chatId -> phoneDigits (E.164-ready)
 let latestQr = "";
 const app = express();
 const QR_PORT = process.env.PORT || 3000;
@@ -149,10 +150,36 @@ async function processAgentMessage(msg) {
     ? await client.getContactById(targetChatId).catch(() => null)
     : null;
 
-  const phone = cleanPhone(targetContact?.number || targetChatId);
+  let phone = resolvePhone(targetContact, msg, chat);
+  let phoneE164 = normalizeToE164BR(phone) || "";
+
+  if (!phoneE164 && targetChatId) {
+    const cachedPhone = chatIdPhoneCache.get(targetChatId);
+    if (cachedPhone && normalizeToE164BR(cachedPhone)) {
+      phone = cachedPhone;
+      phoneE164 = normalizeToE164BR(cachedPhone) || "";
+    }
+  }
+
+  if (!phoneE164 && msg?.hasQuotedMsg) {
+    const quoted = await msg.getQuotedMessage().catch(() => null);
+    if (quoted) {
+      const quotedContact = await quoted.getContact().catch(() => null);
+      const quotedChat = await quoted.getChat().catch(() => null);
+      const quotedPhone = resolvePhone(quotedContact, quoted, quotedChat);
+      if (normalizeToE164BR(quotedPhone)) {
+        phone = quotedPhone;
+        phoneE164 = normalizeToE164BR(quotedPhone) || "";
+      }
+    }
+  }
+
+  if (phoneE164 && targetChatId) {
+    chatIdPhoneCache.set(targetChatId, phone);
+  }
+
   const nome = resolveNome(targetContact, chat, phone);
   const nomeNewBR = resolveNomeNewBR(targetContact, phone);
-  const phoneE164 = normalizeToE164BR(phone) || "";
   const contactType = resolveTipoContato(chat, targetChatId);
 
   const ctx = { contactType, name: nome, phoneE164, chatId: targetChatId, origin: "AGENTE" };
@@ -255,13 +282,35 @@ function resolveNome(contact, chat, phone) {
   );
 }
 
-function resolvePhone(contact, msg) {
-  const raw =
-    contact?.number ||
-    msg?.from ||
-    msg?.to ||
-    "";
-  return cleanPhone(raw);
+function findValidPhoneDigits(candidates = []) {
+  for (const candidate of candidates) {
+    const digits = cleanPhone(candidate);
+    if (normalizeToE164BR(digits)) return digits;
+  }
+  return "";
+}
+
+function pickFirstDigits(candidates = []) {
+  for (const candidate of candidates) {
+    const digits = cleanPhone(candidate);
+    if (digits) return digits;
+  }
+  return "";
+}
+
+function resolvePhone(contact, msg, chat) {
+  const candidates = [
+    contact?.number,
+    contact?.id?.user,
+    contact?.id?._serialized,
+    chat?.contact?.number,
+    chat?.contact?.id?.user,
+    chat?.id?.user,
+    chat?.id?._serialized,
+    msg?.from,
+    msg?.to
+  ];
+  return findValidPhoneDigits(candidates) || pickFirstDigits(candidates);
 }
 
 function resolveAppName(appEscolhido = "") {
@@ -949,13 +998,16 @@ async function processMessage(msg) {
   const contact = await msg.getContact().catch(() => null);
   const chat = await msg.getChat().catch(() => null);
   const chatId = msg?.from || "";
-  const phone = resolvePhone(contact, msg);
+  const phone = resolvePhone(contact, msg, chat);
   const nome = resolveNome(contact, chat, phone);
   const nomeNewBR = resolveNomeNewBR(contact, phone);
   const texto = (msg.body || "").trim();
   const textoLower = texto.toLowerCase();
   const contactType = resolveTipoContato(chat, chatId);
   const phoneE164 = normalizeToE164BR(phone) || "";
+  if (chatId && phoneE164) {
+    chatIdPhoneCache.set(chatId, phone);
+  }
 
   let errorForLog = null;
   const finish = () => ({ ctx: { contactType, name: nome, phoneE164, chatId, origin: "CLIENTE" }, errorForLog });
