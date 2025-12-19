@@ -153,14 +153,6 @@ async function processAgentMessage(msg) {
   let phone = resolvePhone(targetContact, msg, chat);
   let phoneE164 = normalizeToE164BR(phone) || "";
 
-  if (!phoneE164 && targetChatId) {
-    const cachedPhone = chatIdPhoneCache.get(targetChatId);
-    if (cachedPhone && normalizeToE164BR(cachedPhone)) {
-      phone = cachedPhone;
-      phoneE164 = normalizeToE164BR(cachedPhone) || "";
-    }
-  }
-
   if (!phoneE164 && msg?.hasQuotedMsg) {
     const quoted = await msg.getQuotedMessage().catch(() => null);
     if (quoted) {
@@ -174,8 +166,12 @@ async function processAgentMessage(msg) {
     }
   }
 
-  if (phoneE164 && targetChatId) {
-    chatIdPhoneCache.set(targetChatId, phone);
+  if (!phoneE164 && targetChatId) {
+    const cachedPhone = chatIdPhoneCache.get(targetChatId);
+    if (cachedPhone && normalizeToE164BR(cachedPhone)) {
+      phone = cachedPhone;
+      phoneE164 = normalizeToE164BR(cachedPhone) || "";
+    }
   }
 
   const nome = resolveNome(targetContact, chat, phone);
@@ -290,27 +286,25 @@ function findValidPhoneDigits(candidates = []) {
   return "";
 }
 
-function pickFirstDigits(candidates = []) {
-  for (const candidate of candidates) {
-    const digits = cleanPhone(candidate);
-    if (digits) return digits;
-  }
-  return "";
+function digitsFromChatId(chatId) {
+  const raw = (chatId || "").toString();
+  if (!raw.endsWith("@c.us")) return "";
+  return cleanPhone(raw);
 }
 
 function resolvePhone(contact, msg, chat) {
+  const fromMe = !!msg?.fromMe;
+  const msgFrom = fromMe ? "" : msg?.from;
+  const msgTo = fromMe ? msg?.to : "";
   const candidates = [
     contact?.number,
-    contact?.id?.user,
-    contact?.id?._serialized,
     chat?.contact?.number,
-    chat?.contact?.id?.user,
-    chat?.id?.user,
-    chat?.id?._serialized,
-    msg?.from,
-    msg?.to
+    digitsFromChatId(contact?.id?._serialized),
+    digitsFromChatId(chat?.id?._serialized),
+    digitsFromChatId(msgFrom),
+    digitsFromChatId(msgTo)
   ];
-  return findValidPhoneDigits(candidates) || pickFirstDigits(candidates);
+  return findValidPhoneDigits(candidates);
 }
 
 function resolveAppName(appEscolhido = "") {
