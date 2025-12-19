@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import { logger } from "./utils/logger.js";
 
 const LOGIN_URL = process.env.GERENCIA_LOGIN_URL || "https://gerenciaapp.top/login";
 const CREATE_URL = process.env.GERENCIA_CREATE_URL || "https://gerenciaapp.top/users/create";
@@ -67,9 +68,9 @@ async function selecionarModoM3u(page) {
   });
 
   if (result.ok) {
-    console.log(`Modo de selecao ajustado para: ${result.escolhido}`);
+    logger.info(`Modo de selecao ajustado para: ${result.escolhido}`);
   } else {
-    console.log(`Aviso: ${result.reason}`);
+    logger.warn(`Aviso: ${result.reason}`);
   }
 }
 
@@ -81,10 +82,12 @@ async function dumpLabels(page) {
       hasInput: !!l.querySelector("input, select, textarea")
     }))
   );
-  console.log("Labels encontrados na pagina de cadastro:");
+  logger.info("Labels encontrados na pagina de cadastro:");
   labels
     .slice(0, 50)
-    .forEach((l, idx) => console.log(`${idx + 1}. "${l.text}" for=${l.forAttr} hasInput=${l.hasInput}`));
+    .forEach((l, idx) =>
+      logger.info(`${idx + 1}. "${l.text}" for=${l.forAttr} hasInput=${l.hasInput}`)
+    );
 }
 
 async function dumpInputs(page) {
@@ -99,9 +102,9 @@ async function dumpInputs(page) {
       className: el.className || ""
     }))
   );
-  console.log("Inputs encontrados na pagina de cadastro:");
+  logger.info("Inputs encontrados na pagina de cadastro:");
   inputs.slice(0, 50).forEach((i) =>
-    console.log(
+    logger.info(
       `${i.idx}. <${i.tag.toLowerCase()}> type=${i.type} name="${i.name}" id="${i.id}" placeholder="${i.placeholder}" class="${i.className}"`
     )
   );
@@ -251,10 +254,10 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
-  const page = await browser.newPage();
+    const page = await browser.newPage();
 
   try {
-    console.log("Acessando tela de login do GerenciaApp...");
+    logger.info("Acessando tela de login do GerenciaApp...");
     await page.goto(LOGIN_URL, { waitUntil: "networkidle2" });
 
     await page.type('input[type="email"], input[name="email"]', GERENCIA_USER, { delay: 20 });
@@ -295,9 +298,9 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
 
     await page.waitForNavigation({ waitUntil: "networkidle2" });
 
-    console.log("Login concluido, abrindo tela de cadastro...");
+    logger.info("Login concluido, abrindo tela de cadastro...");
     await page.goto(CREATE_URL, { waitUntil: "networkidle2" });
-    console.log("Ajustando modo de selecao para M3U8...");
+    logger.info("Ajustando modo de selecao para M3U8...");
     await selecionarModoM3u(page);
 
     try {
@@ -317,7 +320,7 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
             }
           }, mac);
         }
-        console.log(`Preenchendo minimal: MAC=${mac} | SERVER=${serverName} | M3U=${m3uValue}`);
+        logger.info(`Preenchendo minimal: MAC=${mac} | SERVER=${serverName} | M3U=${m3uValue}`);
       }
 
       const camposParaPreencher = minimalFields
@@ -352,13 +355,13 @@ export async function criarUsuarioGerenciaAppComM3u(m3uValue, options = {}) {
       throw err;
     }
 
-    console.log("Campos preenchidos, enviando formulario...");
+    logger.info("Campos preenchidos, enviando formulario...");
     await clickSubmit(page);
     await page.waitForNavigation({ waitUntil: "networkidle2" }).catch(() => {});
 
-    console.log("Cadastro enviado no GerenciaApp.");
+    logger.info("Cadastro enviado no GerenciaApp.");
   } catch (error) {
-    console.error("Erro na automacao GerenciaApp:", error.message);
+    logger.error("Erro na automacao GerenciaApp", error);
     throw error;
   } finally {
     await browser.close();
