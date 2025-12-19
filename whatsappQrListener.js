@@ -290,10 +290,44 @@ function resolveNome(contact, chat, phone) {
 
 function findValidPhoneDigits(candidates = []) {
   for (const candidate of candidates) {
-    const digits = cleanPhone(candidate);
-    if (normalizeToE164BR(digits)) return digits;
+    const digits = extractPhoneFromText(candidate);
+    if (digits) return digits;
   }
   return "";
+}
+
+function extractPhoneFromText(text) {
+  const raw = (text || "").toString().trim();
+  if (!raw) return "";
+
+  const matches = raw.match(/(\+?\d[\d\s().-]{8,}\d)/g);
+  if (matches) {
+    for (const match of matches) {
+      const digits = cleanPhone(match);
+      if (normalizeToE164BR(digits)) return digits;
+    }
+  }
+
+  const digits = cleanPhone(raw);
+  if (normalizeToE164BR(digits)) return digits;
+  return "";
+}
+
+function findPhoneFromDisplayName(contact, chat, msg) {
+  const nameCandidates = [
+    contact?.verifiedName,
+    contact?.pushname,
+    contact?.name,
+    contact?.shortName,
+    msg?._data?.notifyName,
+    msg?._data?.sender?.pushname
+  ];
+
+  if (!chat?.isGroup) {
+    nameCandidates.push(chat?.name);
+  }
+
+  return findValidPhoneDigits(nameCandidates);
 }
 
 function resolvePhone(contact, msg, chat) {
@@ -315,7 +349,9 @@ function resolvePhone(contact, msg, chat) {
       contactId,
       msgAuthor
     ];
-    return findValidPhoneDigits(candidates);
+    const fromCandidates = findValidPhoneDigits(candidates);
+    if (fromCandidates) return fromCandidates;
+    return findPhoneFromDisplayName(contact, chat, msg);
   }
 
   const candidates = [
@@ -327,7 +363,9 @@ function resolvePhone(contact, msg, chat) {
     msg?.from,
     msgAuthor
   ];
-  return findValidPhoneDigits(candidates);
+  const fromCandidates = findValidPhoneDigits(candidates);
+  if (fromCandidates) return fromCandidates;
+  return findPhoneFromDisplayName(contact, chat, msg);
 }
 
 function resolveAppName(appEscolhido = "") {
