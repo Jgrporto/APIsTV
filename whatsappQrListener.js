@@ -141,19 +141,18 @@ async function replyBot(msg, phoneDigits, nome, texto) {
 async function processAgentMessage(msg) {
   const corpo = (msg?.body || "").trim();
   const corpoUpper = corpo.toUpperCase();
-  const targetChatId = msg?.to || msg?.from || "";
-
   const chat = await msg.getChat().catch(() => null);
+  const targetChatId = resolveTargetChatId(msg, chat);
   const isGroup = !!chat?.isGroup || targetChatId.endsWith("@g.us");
 
   const targetContact = targetChatId
     ? await client.getContactById(targetChatId).catch(() => null)
     : null;
 
-  let phone = resolvePhone(targetContact, msg, chat);
-  let phoneE164 = normalizeToE164BR(phone) || "";
+  let phone = "";
+  let phoneE164 = "";
 
-  if (!phoneE164 && msg?.hasQuotedMsg) {
+  if (msg?.hasQuotedMsg) {
     const quoted = await msg.getQuotedMessage().catch(() => null);
     if (quoted) {
       const quotedContact = await quoted.getContact().catch(() => null);
@@ -162,6 +161,7 @@ async function processAgentMessage(msg) {
       if (normalizeToE164BR(quotedPhone)) {
         phone = quotedPhone;
         phoneE164 = normalizeToE164BR(quotedPhone) || "";
+        if (targetChatId) chatIdPhoneCache.set(targetChatId, quotedPhone);
       }
     }
   }
@@ -174,6 +174,11 @@ async function processAgentMessage(msg) {
     }
   }
 
+  if (!phoneE164) {
+    phone = resolvePhone(targetContact, msg, chat);
+    phoneE164 = normalizeToE164BR(phone) || "";
+  }
+
   const nome = resolveNome(targetContact, chat, phone);
   const nomeNewBR = resolveNomeNewBR(targetContact, phone);
   const contactType = resolveTipoContato(chat, targetChatId);
@@ -182,6 +187,12 @@ async function processAgentMessage(msg) {
   const content = formatConteudoParaLog(msg);
 
   if (isGroup) return { ctx, content, errorForLog: null };
+
+  let errorForLog = null;
+  if (!phoneE164) {
+    errorForLog = { type: "PHONE_NOT_FOUND", details: "Telefone do cliente nao identificado para esta conversa." };
+    return { ctx, content, errorForLog };
+  }
 
   if (isInstrucaoMensagem(corpo)) {
     fluxoCelular.set(phone, { stage: "aguardando_prova", confirming: false, printReminderSent: false, mac: null });
@@ -193,7 +204,6 @@ async function processAgentMessage(msg) {
   }
 
   const token = corpoUpper.startsWith("#") ? corpoUpper.split(/\s+/)[0] : "";
-  let errorForLog = null;
 
   if (token === COMMANDS.IBO) {
     // 1) #IBO com mídia enviada pelo próprio agente (lê o MAC direto da imagem)
@@ -286,23 +296,36 @@ function findValidPhoneDigits(candidates = []) {
   return "";
 }
 
-function digitsFromChatId(chatId) {
-  const raw = (chatId || "").toString();
-  if (!raw.endsWith("@c.us")) return "";
-  return cleanPhone(raw);
-}
-
 function resolvePhone(contact, msg, chat) {
-  const fromMe = !!msg?.fromMe;
-  const msgFrom = fromMe ? "" : msg?.from;
-  const msgTo = fromMe ? msg?.to : "";
+  const chatId = chat?.id?._serialized || "";
+  const chatUser = chat?.id?.user || "";
+  const isSelfContact = !!contact?.isMe;
+  const contactNumber = isSelfContact ? "" : contact?.number;
+  const contactUser = isSelfContact ? "" : contact?.id?.user || "";
+  const contactId = isSelfContact ? "" : contact?.id?._serialized || "";
+  const msgAuthor = msg?.author || "";
+
+  if (msg?.fromMe) {
+    const candidates = [
+      msg?.to,
+      chatId,
+      chatUser,
+      contactNumber,
+      contactUser,
+      contactId,
+      msgAuthor
+    ];
+    return findValidPhoneDigits(candidates);
+  }
+
   const candidates = [
-    contact?.number,
-    chat?.contact?.number,
-    digitsFromChatId(contact?.id?._serialized),
-    digitsFromChatId(chat?.id?._serialized),
-    digitsFromChatId(msgFrom),
-    digitsFromChatId(msgTo)
+    contactNumber,
+    contactUser,
+    contactId,
+    chatUser,
+    chatId,
+    msg?.from,
+    msgAuthor
   ];
   return findValidPhoneDigits(candidates);
 }
@@ -336,6 +359,13 @@ function nomeSeguro(nome, phone) {
 
 function resolveChatIdConversa(msg) {
   return msg?.fromMe ? msg?.to : msg?.from;
+}
+
+function resolveTargetChatId(msg, chat) {
+  if (msg?.fromMe) {
+    return msg?.to || chat?.id?._serialized || "";
+  }
+  return msg?.from || chat?.id?._serialized || "";
 }
 
 async function gerarTesteSeguro(cliente, nome = "", appEscolhido = "", mac) {
